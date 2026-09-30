@@ -1,4 +1,10 @@
-from app.core.task_state import TaskPhase, final_phase, phase_from_log, phase_from_status
+from app.core.task_state import (
+    TaskPhase,
+    final_phase,
+    phase_from_log,
+    phase_from_status,
+    status_matches_task,
+)
 
 
 def test_parses_orchestrator_log_phases() -> None:
@@ -28,4 +34,20 @@ def test_status_json_drives_phase_without_guessing() -> None:
     assert final_phase(0, None, False) == TaskPhase.UNKNOWN
     assert final_phase(2, {"status": "blocked"}, False) == TaskPhase.BLOCKED
     assert final_phase(0, {"status": "complete"}, True) == TaskPhase.CANCELLED
+
+
+def test_status_matches_task_fails_closed_on_unverifiable_payload() -> None:
+    # No current task: nothing to filter against, so any payload is accepted.
+    assert status_matches_task({"status": "executing"}, None) is True
+
+    # Matching goal: accepted.
+    assert status_matches_task({"goal": "fix the bug"}, "fix the bug") is True
+
+    # Different goal: a stale/foreign run's status must not be shown as ours.
+    assert status_matches_task({"goal": "someone else's task"}, "fix the bug") is False
+
+    # Missing or malformed goal field: previously treated as a match (fail
+    # open); must now fail closed since we cannot verify it belongs to us.
+    assert status_matches_task({"status": "executing"}, "fix the bug") is False
+    assert status_matches_task({"goal": 123}, "fix the bug") is False
 

@@ -15,15 +15,29 @@ class GitManager(QObject):
         self._process: CapturedProcess | None = None
         self._project_path = ""
         self._status = ""
+        self._pending_path: str | None = None
 
     def refresh(self, project_path: str) -> None:
         if self._process and self._process.running:
+            # A status/diff round trip is already in flight. Remember only
+            # the latest request instead of starting a second process or
+            # silently dropping it; the in-flight cycle triggers it once it
+            # finishes (see _advance_pending).
+            self._pending_path = project_path
             return
+        self._pending_path = None
         self._project_path = project_path
         self._start(
             CommandSpec("git", ("-C", project_path, "status", "--short"), project_path),
             self._on_status,
         )
+
+    def _advance_pending(self) -> None:
+        if self._pending_path is None:
+            return
+        path = self._pending_path
+        self._pending_path = None
+        self.refresh(path)
 
     def _start(self, command: CommandSpec, callback: object) -> None:
         process = CapturedProcess(self)
@@ -34,12 +48,13 @@ class GitManager(QObject):
 
     def _on_status(self, exit_code: int, stdout: str, stderr: str) -> None:
         process = self._take_process()
-        if exit_code != 0:
-            self.failed.emit(stderr.strip() or "无法读取 Git 状态。")
-            return
-        self._status = stdout.strip() or "[clean]"
         if process:
             process.deleteLater()
+        if exit_code != 0:
+            self.failed.emit(stderr.strip() or "无法读取 Git 状态。")
+            self._advance_pending()
+            return
+        self._status = stdout.strip() or "[clean]"
         self._start(
             CommandSpec(
                 "git",
@@ -55,14 +70,16 @@ class GitManager(QObject):
             process.deleteLater()
         if exit_code != 0:
             self.failed.emit(stderr.strip() or "无法读取 Git Diff。")
-            return
-        self.refreshed.emit(self._status, stdout.strip() or "[no diff]")
+        else:
+            self.refreshed.emit(self._status, stdout.strip() or "[no diff]")
+        self._advance_pending()
 
     def _on_failure(self, process: CapturedProcess, message: str) -> None:
         if self._process is process:
             self._process = None
         process.deleteLater()
         self.failed.emit(f"Git 进程启动失败：{message}")
+        self._advance_pending()
 
     def _take_process(self) -> CapturedProcess | None:
         process = self._process

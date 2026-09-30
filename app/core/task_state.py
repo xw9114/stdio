@@ -82,6 +82,20 @@ def phase_from_status(payload: dict[str, Any]) -> StateSnapshot:
     )
 
 
+def status_matches_task(payload: dict[str, Any], task_description: str | None) -> bool:
+    """Decide whether a ``status --json`` payload belongs to the given task.
+
+    Fails closed: when there is a task to match against but the payload does
+    not carry a usable ``goal`` field, we cannot verify it, so treat it as a
+    mismatch rather than risk showing another run's state as if it were the
+    current one.
+    """
+    if task_description is None:
+        return True
+    goal = payload.get("goal")
+    return isinstance(goal, str) and goal == task_description
+
+
 def final_phase(exit_code: int, payload: dict[str, Any] | None, cancelled: bool) -> TaskPhase:
     if cancelled:
         return TaskPhase.CANCELLED

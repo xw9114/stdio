@@ -10,7 +10,12 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from app.constants import STATUS_POLL_INTERVAL_MS
 from app.core.command_builder import CommandBuilder, CommandSpec
 from app.core.process_manager import CapturedProcess, TaskProcessManager
-from app.core.task_state import StateSnapshot, phase_from_log, phase_from_status
+from app.core.task_state import (
+    StateSnapshot,
+    phase_from_log,
+    phase_from_status,
+    status_matches_task,
+)
 from app.models.task import AgentTask
 
 LOGGER = logging.getLogger(__name__)
@@ -144,7 +149,8 @@ class OrchestratorClient(QObject):
             self._status_process = None
         process.deleteLater()
         payload = _parse_json_payload(stdout)
-        if payload and self._status_matches_current_task(payload):
+        task_description = self._current_task.description if self._current_task else None
+        if payload and status_matches_task(payload, task_description):
             self.status_updated.emit(payload)
             self.phase_changed.emit(phase_from_status(payload))
         else:
@@ -163,12 +169,6 @@ class OrchestratorClient(QObject):
         LOGGER.warning("Could not start status command: %s", message)
         if final:
             self._emit_final(None)
-
-    def _status_matches_current_task(self, payload: dict[str, Any]) -> bool:
-        if not self._current_task:
-            return True
-        goal = payload.get("goal")
-        return not isinstance(goal, str) or goal == self._current_task.description
 
     def _emit_final(self, payload: dict[str, Any] | None) -> None:
         exit_code, cancelled = self._pending_final or (-1, False)

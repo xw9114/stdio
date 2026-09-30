@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from app.core.command_builder import CommandSpec
+
+_WINDOWS_LAUNCHER_SCRIPT = Path(__file__).resolve().parent / "windows_launcher.ps1"
 
 
 def configure_process(process: QProcess, command: CommandSpec) -> None:
@@ -16,7 +19,6 @@ def configure_process(process: QProcess, command: CommandSpec) -> None:
     environment = QProcessEnvironment.systemEnvironment()
     environment.remove("FORCE_COLOR")
     environment.insert("NO_COLOR", "1")
-    process.setProcessEnvironment(environment)
 
     program = command.program
     if os.name == "nt":
@@ -31,13 +33,35 @@ def configure_process(process: QProcess, command: CommandSpec) -> None:
 
     suffix = Path(program).suffix.lower()
     if os.name == "nt" and suffix in {".cmd", ".bat"}:
-        process.setProgram(os.environ.get("COMSPEC", "cmd.exe"))
-        command_line = subprocess.list2cmdline([program, *command.arguments])
-        process.setArguments(["/d", "/s", "/c", command_line])
+        # Do NOT route this through `cmd.exe /d /s /c "<flattened string>"`:
+        # that requires collapsing the program path and every argument into
+        # one string, and once more than one segment needs quoting (e.g. a
+        # multi-word task description), cmd.exe's own /C quote-stripping
+        # heuristic corrupts it - confirmed by reproduction, a multi-word
+        # argument came back shredded into one argv token per word with a
+        # stray leading/trailing quote character. PowerShell's array
+        # splatting (see windows_launcher.ps1) passes each argument through
+        # in one hop with no equivalent ambiguity.
+        environment.insert("DUAL_AGENT_STUDIO_EXECUTABLE", program)
+        environment.insert(
+            "DUAL_AGENT_STUDIO_ARGUMENTS",
+            base64.b64encode(json.dumps(list(command.arguments)).encode("utf-8")).decode("ascii"),
+        )
+        process.setProcessEnvironment(environment)
+        process.setProgram(_resolve_powershell())
+        process.setArguments(
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(_WINDOWS_LAUNCHER_SCRIPT)]
+        )
         return
 
+    process.setProcessEnvironment(environment)
     process.setProgram(program)
     process.setArguments(list(command.arguments))
+
+
+def _resolve_powershell() -> str:
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
 class CapturedProcess(QObject):

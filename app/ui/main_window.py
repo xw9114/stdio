@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -14,23 +15,24 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
-    QStyle,
     QTabWidget,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
+from app.constants import AGENT_LABELS
 from app.core.git_manager import GitManager
 from app.core.orchestrator_client import OrchestratorClient
-from app.core.task_state import StateSnapshot, TaskPhase, final_phase
+from app.core.task_state import StateSnapshot, TaskPhase, final_phase, phase_from_log
 from app.models.environment import EnvironmentStatus
 from app.models.settings import AppSettings
 from app.models.task import AgentTask, utc_now_iso
 from app.services.cli_detector import CliDetector
 from app.services.history_service import HistoryService
 from app.services.settings_service import SettingsService
+from app.ui.chat_view import ChatView
 from app.ui.git_panel import GitPanel
 from app.ui.history_panel import HistoryPanel
 from app.ui.log_panel import LogPanel
@@ -42,6 +44,31 @@ from app.ui.welcome_dialog import WelcomeDialog
 from app.utils.paths import logs_directory
 
 LOGGER = logging.getLogger(__name__)
+
+
+class _ElidedLabel(QLabel):
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.set_full_text(text)
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = text
+        self.setToolTip(text)
+        self._update_text()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_text()
+
+    def _update_text(self) -> None:
+        displayed = self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, max(1, self.width())
+        )
+        if self.text() != displayed:
+            self.setText(displayed)
 
 
 class MainWindow(QMainWindow):
@@ -75,59 +102,78 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._after_show)
 
     def _build_ui(self) -> None:
-        toolbar = QToolBar("Main", self)
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-        title = QLabel("Dual Agent Studio")
-        title.setObjectName("appTitle")
-        toolbar.addWidget(title)
-        spacer = QWidget()
-        spacer.setSizePolicy(
-            spacer.sizePolicy().Policy.Expanding,
-            spacer.sizePolicy().Policy.Preferred,
-        )
-        toolbar.addWidget(spacer)
-        self.environment_button = QPushButton("检查环境")
-        self.environment_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        )
-        toolbar.addWidget(self.environment_button)
-        settings_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            "设置",
-            self,
-        )
-        toolbar.addAction(settings_action)
-        self.settings_action = settings_action
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.history_panel = HistoryPanel()
+        self.environment_button = self.history_panel.environment_button
+        self.splitter.addWidget(self.history_panel)
 
-        central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 12)
-        root.setSpacing(10)
+        center = QWidget()
+        center.setMinimumWidth(420)
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
 
-        top_splitter = QSplitter(Qt.Orientation.Horizontal)
+        header = QWidget()
+        header.setObjectName("headerBar")
+        header.setFixedHeight(48)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(24, 0, 24, 0)
+        header_layout.setSpacing(10)
+        self.thread_title = _ElidedLabel("新任务")
+        self.thread_title.setObjectName("threadTitle")
+        header_layout.addWidget(self.thread_title, 1)
+        self.phase_pill = _ElidedLabel("空闲")
+        self.phase_pill.setObjectName("phasePill")
+        self.phase_pill.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.phase_pill.setMinimumWidth(100)
+        self.phase_pill.setMaximumWidth(210)
+        header_layout.addWidget(self.phase_pill)
+        self.inspector_toggle = QPushButton("详情")
+        self.inspector_toggle.setObjectName("toolButton")
+        self.inspector_toggle.setCheckable(True)
+        header_layout.addWidget(self.inspector_toggle)
+        center_layout.addWidget(header)
+
+        self.chat_view = ChatView()
+        center_layout.addWidget(self.chat_view, 1)
+
+        composer_host = QWidget()
+        composer_layout = QHBoxLayout(composer_host)
+        composer_layout.setContentsMargins(24, 0, 24, 16)
+        composer_layout.setSpacing(0)
+        composer_layout.addStretch(0)
         self.task_panel = TaskPanel()
-        self.status_panel = StatusPanel()
-        top_splitter.addWidget(self.task_panel)
-        top_splitter.addWidget(self.status_panel)
-        top_splitter.setStretchFactor(0, 7)
-        top_splitter.setStretchFactor(1, 3)
-        top_splitter.setSizes([820, 340])
-        root.addWidget(top_splitter, 3)
+        self.task_panel.setMaximumWidth(860)
+        self.task_panel.setMinimumHeight(280)
+        composer_layout.addWidget(self.task_panel, 1)
+        composer_layout.addStretch(0)
+        center_layout.addWidget(composer_host)
+        self.splitter.addWidget(center)
 
         self.tabs = QTabWidget()
+        self.tabs.setMinimumWidth(220)
+        self.tabs.setMaximumWidth(500)
+        self.tabs.tabBar().setUsesScrollButtons(True)
         self.result_panel = ResultPanel()
+        self.status_panel = StatusPanel()
         self.log_panel = LogPanel()
         self.git_panel = GitPanel()
         self.json_view = self._create_json_view()
-        self.history_panel = HistoryPanel()
         self.tabs.addTab(self.result_panel, "概要")
-        self.tabs.addTab(self.log_panel, "实时日志")
+        self.tabs.addTab(self.status_panel, "流程")
         self.tabs.addTab(self.git_panel, "Git Diff")
+        self.tabs.addTab(self.log_panel, "日志")
         self.tabs.addTab(self.json_view, "JSON")
-        self.tabs.addTab(self.history_panel, "历史记录")
-        root.addWidget(self.tabs, 2)
-        self.setCentralWidget(central)
+        self.splitter.addWidget(self.tabs)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setCollapsible(2, True)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setSizes([248, 760, 380])
+        self.tabs.hide()
+        self.setCentralWidget(self.splitter)
         self.statusBar().showMessage("就绪")
 
     @staticmethod
@@ -146,14 +192,19 @@ class MainWindow(QMainWindow):
         self.task_panel.start_requested.connect(self._start_task)
         self.task_panel.stop_requested.connect(self._stop_task)
         self.task_panel.project_changed.connect(self._on_project_changed)
-        self.environment_button.clicked.connect(self._check_environment)
-        self.settings_action.triggered.connect(self._show_settings)
+        self.history_panel.new_task_requested.connect(self._new_task)
+        self.history_panel.environment_requested.connect(self._check_environment)
+        self.history_panel.settings_requested.connect(self._show_settings)
         self.git_panel.refresh_requested.connect(self._refresh_git)
         self.history_panel.task_selected.connect(self._show_history_task)
+        self.inspector_toggle.toggled.connect(self._set_inspector_visible)
+        self.chat_view.show_diff_requested.connect(self._show_diff)
 
         self.client.log_received.connect(self._append_log)
         self.client.task_started.connect(self._on_task_started)
         self.client.phase_changed.connect(self.status_panel.set_snapshot)
+        self.client.phase_changed.connect(self.chat_view.set_phase)
+        self.client.phase_changed.connect(self._update_phase_pill)
         self.client.status_updated.connect(self._on_status_updated)
         self.client.task_finished.connect(self._on_task_finished)
         self.client.operation_finished.connect(self._on_operation_finished)
@@ -163,6 +214,40 @@ class MainWindow(QMainWindow):
         self.git_manager.failed.connect(self.git_panel.set_error)
         self.cli_detector.progress.connect(self.status_panel.set_environment_progress)
         self.cli_detector.finished.connect(self._on_environment_finished)
+
+    def _set_inspector_visible(self, visible: bool) -> None:
+        self.tabs.setVisible(visible)
+        if visible:
+            sidebar_width = self.history_panel.width() or 248
+            available = self.splitter.width() - sidebar_width - 2 * self.splitter.handleWidth()
+            inspector_width = min(380, max(220, available - 420))
+            self.splitter.setSizes(
+                [sidebar_width, max(420, available - inspector_width), inspector_width]
+            )
+
+    def _show_diff(self) -> None:
+        self.inspector_toggle.setChecked(True)
+        self.tabs.setCurrentWidget(self.git_panel)
+
+    def _update_phase_pill(self, snapshot: StateSnapshot) -> None:
+        self.phase_pill.set_full_text(snapshot.message)
+
+    def _set_thread_title(self, description: str) -> None:
+        first_line = description.splitlines()[0].strip() if description else ""
+        self.thread_title.set_full_text(first_line or "新任务")
+
+    def _new_task(self) -> None:
+        if self.client.running:
+            return
+        self.chat_view.clear()
+        self.result_panel.clear()
+        self.log_panel.clear()
+        self.json_view.clear()
+        self.history_panel.clear_selection()
+        self.status_panel.set_snapshot(StateSnapshot(TaskPhase.IDLE, "空闲"))
+        self.thread_title.set_full_text("新任务")
+        self.phase_pill.set_full_text("空闲")
+        self.task_panel.description_edit.setFocus()
 
     def _after_show(self) -> None:
         if not Path(self.settings.orchestrator_path).is_file():
@@ -261,15 +346,22 @@ class MainWindow(QMainWindow):
         self.json_view.clear()
         self._open_log(task)
         self.task_panel.set_running(True)
-        self.status_panel.set_snapshot(StateSnapshot(TaskPhase.RUNNING, "正在启动任务"))
-        self.tabs.setCurrentWidget(self.log_panel)
-        self._append_log("System", f"项目：{project}")
-        self._append_log("System", f"Brain={task.brain}, Executor={task.executor}, 最大返工={task.max_retries}")
+        starting = StateSnapshot(TaskPhase.RUNNING, "正在启动任务")
+        self.status_panel.set_snapshot(starting)
+        self._update_phase_pill(starting)
         try:
             self.client.run_task(task)
         except (FileNotFoundError, RuntimeError) as error:
+            self.chat_view.clear()
+            self.chat_view.add_user_message(description, _task_meta(task))
+            self._set_thread_title(description)
             self._append_log("Error", str(error))
             self._finish_without_process(str(error))
+            return
+        self.chat_view.clear()
+        self.chat_view.add_user_message(description, _task_meta(task))
+        self._set_thread_title(description)
+        self.task_panel.clear_description()
 
     def _stop_task(self) -> None:
         if not self.client.running:
@@ -308,7 +400,10 @@ class MainWindow(QMainWindow):
         task.finished_at = utc_now_iso()
         task.status_json = payload
         task.result_summary = _final_summary(phase, payload, exit_code)
-        self.status_panel.set_snapshot(StateSnapshot(phase, task.result_summary))
+        final_snapshot = StateSnapshot(phase, task.result_summary)
+        self.status_panel.set_snapshot(final_snapshot)
+        self.chat_view.set_phase(final_snapshot)
+        self._update_phase_pill(final_snapshot)
         self.result_panel.set_task(task, payload)
         if payload:
             self.json_view.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -316,12 +411,14 @@ class MainWindow(QMainWindow):
             "Success" if phase == TaskPhase.PASSED else "Warning" if phase == TaskPhase.CANCELLED else "Error",
             task.result_summary,
         )
+        self.chat_view.add_result(task, payload)
         self._close_log()
         self.history = self._history_service.add(task)
         self.history_panel.set_history(self.history)
         self.task_panel.set_running(False)
         self.statusBar().showMessage(task.result_summary)
-        self.tabs.setCurrentWidget(self.result_panel)
+        if self.tabs.isVisible():
+            self.tabs.setCurrentWidget(self.result_panel)
         self._refresh_git()
         self.current_task = None
         if self._close_after_task:
@@ -335,6 +432,12 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, source: str, text: str) -> None:
         self.log_panel.append_line(source, text)
+        if source != "System":
+            if source == "Process":
+                snapshot = phase_from_log(text)
+                if snapshot:
+                    self.chat_view.set_phase(snapshot)
+            self.chat_view.append_log(source, text)
         if self._log_handle:
             self._log_handle.write(f"[{source}] {text}\n")
             self._log_handle.flush()
@@ -414,18 +517,39 @@ class MainWindow(QMainWindow):
 
     def _show_history_task(self, task: AgentTask) -> None:
         if self.client.running:
+            self.history_panel.clear_selection()
             return
+        self.chat_view.clear()
+        self.chat_view.add_user_message(task.description, _task_meta(task))
+        self._set_thread_title(task.description)
+        self.phase_pill.set_full_text(task.result_summary or "历史任务")
         self.result_panel.set_task(task, task.status_json)
         self.json_view.setPlainText(
             json.dumps(task.status_json, ensure_ascii=False, indent=2)
             if task.status_json
             else ""
         )
+        self.log_panel.clear()
         if task.log_path and Path(task.log_path).is_file():
             try:
-                self.log_panel.set_text(Path(task.log_path).read_text(encoding="utf-8"))
+                log_text = Path(task.log_path).read_text(encoding="utf-8")
             except OSError as error:
                 self.log_panel.set_text(f"无法读取历史日志：{error}")
+            else:
+                self.log_panel.set_text(log_text)
+                for line in log_text.splitlines():
+                    parsed = _parse_log_line(line)
+                    if parsed is None:
+                        continue
+                    source, text = parsed
+                    if source == "System":
+                        continue
+                    if source == "Process":
+                        snapshot = phase_from_log(text)
+                        if snapshot:
+                            self.chat_view.set_phase(snapshot)
+                    self.chat_view.append_log(source, text)
+        self.chat_view.add_result(task, task.status_json)
 
     def _valid_project_or_warn(self) -> str | None:
         project = self.task_panel.project_path()
@@ -457,6 +581,17 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _task_meta(task: AgentTask) -> str:
+    brain = AGENT_LABELS.get(task.brain, task.brain)
+    executor = AGENT_LABELS.get(task.executor, task.executor)
+    return f"{brain} → {executor} · 最多返工 {task.max_retries} 次"
+
+
+def _parse_log_line(line: str) -> tuple[str, str] | None:
+    match = re.fullmatch(r"\[([^\]\r\n]+)\] (.*)", line.rstrip("\r\n"))
+    return (match.group(1), match.group(2)) if match else None
+
+
 def _final_summary(
     phase: TaskPhase,
     payload: dict[str, object] | None,
@@ -473,4 +608,3 @@ def _final_summary(
     if phase == TaskPhase.UNKNOWN:
         return "进程已结束，但无法确认最终验收状态。"
     return f"任务执行失败，退出码：{exit_code}。"
-

@@ -10,13 +10,14 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QFrame, QMessageBox
 
 import app.utils.paths as paths_module
 from app.core.task_state import TaskPhase
 from app.models.settings import AppSettings
+from app.models.task import AgentTask
 from app.services.settings_service import SettingsService
-from app.ui.main_window import MainWindow
+from app.ui.main_window import MainWindow, _parse_log_line
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="uses a Windows .cmd shim and real QWidgets")
 
@@ -97,8 +98,12 @@ def test_full_task_flow_updates_result_status_and_history(
     window._start_task()
     assert window.client.running
 
-    QTimer.singleShot(15000, app.quit)  # safety timeout
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(app.quit)
+    timeout.start(15000)  # safety timeout
     app.exec()
+    timeout.stop()
 
     assert finished_signals, "orchestrator task never finished"
     assert window.current_task is None
@@ -110,6 +115,9 @@ def test_full_task_flow_updates_result_status_and_history(
     assert len(window.history) == 1
     assert window.history[0].status == TaskPhase.PASSED.value
     assert window.history[0].description == goal
+    assert window.chat_view.message_count() >= 2
+    assert window.task_panel.description() == ""
+    assert len(window.chat_view.findChildren(QFrame, "stepCard")) == 3
 
     on_disk = json.loads((data_dir / "history.json").read_text(encoding="utf-8"))
     assert len(on_disk) == 1
@@ -153,8 +161,12 @@ def test_unwritable_log_file_does_not_abort_task(
     assert window.client.running
     assert "disk full" in window.log_panel.editor.toPlainText()
 
-    QTimer.singleShot(15000, app.quit)  # safety timeout
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(app.quit)
+    timeout.start(15000)  # safety timeout
     app.exec()
+    timeout.stop()
 
     assert finished == [0]
     assert window.history[0].status == TaskPhase.PASSED.value
@@ -196,4 +208,100 @@ def test_start_task_with_missing_project_warns_without_touching_client(
     assert not window.client.running
     assert window.current_task is None
 
+    window.close()
+
+
+def test_new_task_resets_chat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    _seed_settings(data_dir, orchestrator_path=str(orchestrator), check_environment_on_start=False)
+
+    window = MainWindow()
+    window.chat_view.add_user_message("旧任务")
+    window.thread_title.set_full_text("旧任务")
+
+    window._new_task()
+
+    assert window.chat_view.message_count() == 0
+    assert window.thread_title.text() == "新任务"
+    window.close()
+
+
+def test_parse_log_line() -> None:
+    assert _parse_log_line("[Process] foo") == ("Process", "foo")
+    assert _parse_log_line("没有前缀") is None
+
+
+def test_start_failure_keeps_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _seed_settings(
+        data_dir,
+        orchestrator_path=str(orchestrator),
+        project_path=str(project_dir),
+        check_environment_on_start=False,
+        auto_detect_roles=False,
+    )
+
+    window = MainWindow()
+    window.task_panel.description_edit.setPlainText("保留这段任务描述")
+
+    def _fail_start(_task: AgentTask) -> None:
+        raise RuntimeError("无法启动")
+
+    monkeypatch.setattr(window.client, "run_task", _fail_start)
+    window._start_task()
+
+    assert window.task_panel.description() == "保留这段任务描述"
+    assert window.result_panel.values["status"].text() == TaskPhase.FAILED.value
+    window.close()
+
+
+def test_history_replay_restores_steps_and_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    _seed_settings(data_dir, orchestrator_path=str(orchestrator), check_environment_on_start=False)
+    log_path = tmp_path / "history.log"
+    log_path.write_text(
+        "[System] 项目：C:/project\n"
+        "[Process] [dual-agent] Brain (claude) is planning...\n"
+        "[Process] [dual-agent] Executor (codex) is running T1, attempt 1/3...\n"
+        "[Process] [dual-agent] Brain is reviewing T1, attempt 1...\n"
+        "[Process] [dual-agent] All tasks passed.\n",
+        encoding="utf-8",
+    )
+    task = AgentTask(
+        description="修复登录问题",
+        project_path="C:/project",
+        brain="claude",
+        executor="codex",
+        max_retries=3,
+        status=TaskPhase.PASSED.value,
+        log_path=str(log_path),
+        result_summary="任务完成。",
+        status_json={"status": "complete"},
+    )
+
+    window = MainWindow()
+    window._show_history_task(task)
+
+    assert window.chat_view.message_count() == 5
+    assert len(window.chat_view.findChildren(QFrame, "stepCard")) == 3
+    assert window.result_panel.values["status"].text() == TaskPhase.PASSED.value
+    assert "is planning" in window.log_panel.editor.toPlainText()
+
+    result = window.chat_view._messages[-1]
+    result.diff_button.click()
+    assert window.inspector_toggle.isChecked()
+    assert not window.tabs.isHidden()
+    assert window.tabs.currentWidget() == window.git_panel
     window.close()

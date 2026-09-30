@@ -2,7 +2,7 @@ from pathlib import Path
 import subprocess
 
 
-ORCHESTRATOR_ROOT = Path(r"E:\codex\dual-agent-orchestrator")
+ORCHESTRATOR_ROOT = Path(r"E:\projects\dual-agent-orchestrator")
 
 
 def test_real_orchestrator_help_contract() -> None:

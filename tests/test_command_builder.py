@@ -11,11 +11,11 @@ def test_build_run_command_preserves_chinese_and_space_paths() -> None:
         max_retries=3,
     )
     command = CommandBuilder(
-        r"E:\codex\dual-agent-orchestrator\dual-agent.cmd"
+        r"E:\projects\dual-agent-orchestrator\dual-agent.cmd"
     ).build_run_command(task)
 
     assert command.as_list() == [
-        r"E:\codex\dual-agent-orchestrator\dual-agent.cmd",
+        r"E:\projects\dual-agent-orchestrator\dual-agent.cmd",
         "run",
         "--cwd",
         r"E:\Projects\项目 With Spaces",

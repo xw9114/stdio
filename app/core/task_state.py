@@ -89,11 +89,20 @@ def status_matches_task(payload: dict[str, Any], task_description: str | None) -
     not carry a usable ``goal`` field, we cannot verify it, so treat it as a
     mismatch rather than risk showing another run's state as if it were the
     current one.
+
+    Both sides are normalized for line endings and surrounding whitespace:
+    the orchestrator trims the goal it stores, and a CRLF picked up on the
+    way through the command line must not turn a genuine match into a
+    mismatch (which would degrade every final result to UNKNOWN).
     """
     if task_description is None:
         return True
     goal = payload.get("goal")
-    return isinstance(goal, str) and goal == task_description
+    return isinstance(goal, str) and _normalize_goal(goal) == _normalize_goal(task_description)
+
+
+def _normalize_goal(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def final_phase(exit_code: int, payload: dict[str, Any] | None, cancelled: bool) -> TaskPhase:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import os
 import shutil
@@ -64,6 +65,36 @@ def _resolve_powershell() -> str:
     return str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
+class IncrementalLineDecoder:
+    """Turns arbitrarily split UTF-8 byte chunks into complete text lines.
+
+    QProcess hands back whatever bytes the pipe had, so a chunk boundary can
+    fall inside a multi-byte character (every CJK character is 3 bytes) or
+    between the "\\r" and "\\n" of a CRLF. Decoding each chunk on its own
+    turned the former into U+FFFD pairs and the latter into a phantom blank
+    line; an incremental decoder plus holding back a trailing "\\r" avoids
+    both.
+    """
+
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._buffer = ""
+
+    def feed(self, data: bytes) -> list[str]:
+        lines = (self._buffer + self._decoder.decode(data)).splitlines(keepends=True)
+        self._buffer = ""
+        # An unterminated tail, or a lone "\r" that may be the first half of
+        # a CRLF split across chunks, waits for the next chunk.
+        if lines and (lines[-1][-1] not in "\r\n" or lines[-1].endswith("\r")):
+            self._buffer = lines.pop()
+        return [line.rstrip("\r\n") for line in lines]
+
+    def flush(self) -> list[str]:
+        text = self._buffer + self._decoder.decode(b"", final=True)
+        self._buffer = ""
+        return text.splitlines()
+
+
 class CapturedProcess(QObject):
     finished = Signal(int, str, str)
     start_failed = Signal(str)
@@ -121,8 +152,8 @@ class TaskProcessManager(QObject):
         super().__init__(parent)
         self._process = QProcess(self)
         self._killer: QProcess | None = None
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
+        self._stdout_lines = IncrementalLineDecoder()
+        self._stderr_lines = IncrementalLineDecoder()
         self._cancel_requested = False
         self._reported_start_error = False
         self._process.readyReadStandardOutput.connect(self._read_stdout)
@@ -142,8 +173,8 @@ class TaskProcessManager(QObject):
     def start(self, command: CommandSpec) -> None:
         if self.running:
             raise RuntimeError("A task process is already running.")
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
+        self._stdout_lines = IncrementalLineDecoder()
+        self._stderr_lines = IncrementalLineDecoder()
         self._cancel_requested = False
         self._reported_start_error = False
         configure_process(self._process, command)
@@ -173,31 +204,22 @@ class TaskProcessManager(QObject):
             self._process.kill()
 
     def _read_stdout(self) -> None:
-        chunk = bytes(self._process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        self._stdout_buffer = self._emit_complete_lines(self._stdout_buffer + chunk, False)
+        data = bytes(self._process.readAllStandardOutput())
+        self._emit_lines(self._stdout_lines.feed(data), False)
 
     def _read_stderr(self) -> None:
-        chunk = bytes(self._process.readAllStandardError()).decode("utf-8", errors="replace")
-        self._stderr_buffer = self._emit_complete_lines(self._stderr_buffer + chunk, True)
+        data = bytes(self._process.readAllStandardError())
+        self._emit_lines(self._stderr_lines.feed(data), True)
 
-    def _emit_complete_lines(self, value: str, is_error: bool) -> str:
-        lines = value.splitlines(keepends=True)
-        remainder = ""
-        if lines and not lines[-1].endswith(("\n", "\r")):
-            remainder = lines.pop()
+    def _emit_lines(self, lines: list[str], is_error: bool) -> None:
         for line in lines:
-            self.line_received.emit(line.rstrip("\r\n"), is_error)
-        return remainder
+            self.line_received.emit(line, is_error)
 
     def _flush_buffers(self) -> None:
         self._read_stdout()
         self._read_stderr()
-        if self._stdout_buffer:
-            self.line_received.emit(self._stdout_buffer, False)
-        if self._stderr_buffer:
-            self.line_received.emit(self._stderr_buffer, True)
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
+        self._emit_lines(self._stdout_lines.flush(), False)
+        self._emit_lines(self._stderr_lines.flush(), True)
 
     def _on_error(self, error: QProcess.ProcessError) -> None:
         if error == QProcess.ProcessError.FailedToStart and not self._reported_start_error:

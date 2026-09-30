@@ -118,6 +118,51 @@ def test_full_task_flow_updates_result_status_and_history(
     window.close()
 
 
+def test_unwritable_log_file_does_not_abort_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: an OSError while creating the per-task log file used
+    to escape _start_task() after the UI had already entered its running
+    state, leaving the window stuck with no process behind it."""
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    goal = "fix login bug"
+    _write_success_shim(orchestrator, goal)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _seed_settings(
+        data_dir,
+        orchestrator_path=str(orchestrator),
+        project_path=str(project_dir),
+        check_environment_on_start=False,
+        auto_detect_roles=False,
+    )
+
+    def _raise_disk_full() -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("app.ui.main_window.logs_directory", _raise_disk_full)
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+    window.task_panel.description_edit.setPlainText(goal)
+    finished: list[int] = []
+    window.client.task_finished.connect(lambda code, *_: (finished.append(code), app.quit()))
+
+    window._start_task()
+    assert window.client.running
+    assert "disk full" in window.log_panel.editor.toPlainText()
+
+    QTimer.singleShot(15000, app.quit)  # safety timeout
+    app.exec()
+
+    assert finished == [0]
+    assert window.history[0].status == TaskPhase.PASSED.value
+    assert window.history[0].log_path is None
+
+    window.close()
+
+
 def test_start_task_with_missing_project_warns_without_touching_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

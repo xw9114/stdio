@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,8 +13,9 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QProcess, QTimer
 
-from app.core.command_builder import CommandSpec
+from app.core.command_builder import CommandBuilder, CommandSpec
 from app.core.process_manager import configure_process
+from app.models.task import AgentTask
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows-specific process launch behaviour")
 
@@ -146,6 +148,52 @@ def test_multi_word_argument_survives_as_a_single_argv_element(tmp_path: Path) -
         "a multi-word argument must survive as ONE argv element, not be split "
         f"word-by-word; got: {recorded!r}"
     )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_goal_with_cmd_metacharacters_reaches_node_forwarder_intact(tmp_path: Path) -> None:
+    """Regression test for a reproduced bug: through dual-agent.cmd's `%*`,
+    cmd.exe cut a multi-line goal at its first newline, ran the text after
+    "&" as a separate command, expanded %VAR% and dropped embedded quotes.
+    CommandBuilder now launches node directly for such a forwarder; this
+    checks with a real node process that every argument arrives unchanged.
+    """
+    record_path = tmp_path / "argv.json"
+    wrapper = tmp_path / "dual-agent.cmd"
+    wrapper.write_text('@echo off\r\nnode "%~dp0src\\cli.js" %*\r\n', encoding="utf-8")
+    script = tmp_path / "src" / "cli.js"
+    script.parent.mkdir()
+    script.write_text(
+        "require('fs').writeFileSync(process.env.ARGV_RECORD,"
+        " JSON.stringify(process.argv.slice(2)));\n",
+        encoding="utf-8",
+    )
+    goal = '修复 "登录" 按钮\n第二行：a&b | c ^ %PATH% !x! trailing\\'
+    task = AgentTask(
+        description=goal,
+        project_path=str(tmp_path),
+        brain="claude",
+        executor="codex",
+        max_retries=1,
+    )
+
+    process = QProcess()
+    configure_process(process, CommandBuilder(str(wrapper)).build_run_command(task))
+    environment = process.processEnvironment()
+    environment.insert("ARGV_RECORD", str(record_path))
+    process.setProcessEnvironment(environment)
+
+    app = QCoreApplication.instance()
+    finished: list[int] = []
+    process.finished.connect(lambda code, _status: (finished.append(code), app.quit()))
+    process.start()
+    QTimer.singleShot(10000, app.quit)  # safety timeout
+    app.exec()
+
+    assert finished == [0]
+    recorded = json.loads(record_path.read_text(encoding="utf-8"))
+    assert recorded[0] == "run"
+    assert recorded[-1] == goal
 
 
 def _decode_launcher_env(process: QProcess) -> tuple[str, list[str]]:

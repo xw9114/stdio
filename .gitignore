@@ -11,4 +11,7 @@ data/history.json
 data/app.log*
 data/logs/*.log
 !data/logs/.gitkeep
+# Per-machine orchestrator config written by `dual-agent init`; it carries
+# executor auto-approval settings that must not be inherited by a clone.
+dual-agent.config.json
 

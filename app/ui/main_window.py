@@ -256,10 +256,10 @@ class MainWindow(QMainWindow):
         )
         self.current_task = task
         self._task_finalized = False
-        self._open_log(task)
         self.log_panel.clear()
         self.result_panel.clear()
         self.json_view.clear()
+        self._open_log(task)
         self.task_panel.set_running(True)
         self.status_panel.set_snapshot(StateSnapshot(TaskPhase.RUNNING, "正在启动任务"))
         self.tabs.setCurrentWidget(self.log_panel)
@@ -341,9 +341,19 @@ class MainWindow(QMainWindow):
 
     def _open_log(self, task: AgentTask) -> None:
         filename = f"{task.started_at[:19].replace(':', '').replace('T', '_')}_{task.id[:8]}.log"
-        path = logs_directory() / filename
+        # The log file is a convenience copy of what the log panel shows.
+        # Failing to create it (disk full, permissions) must not abort the
+        # task after the UI has already switched into its running state.
+        try:
+            path = logs_directory() / filename
+            self._log_handle = path.open("w", encoding="utf-8")
+        except OSError as error:
+            LOGGER.warning("Could not create task log file: %s", error)
+            self._log_handle = None
+            task.log_path = None
+            self._append_log("Warning", f"无法创建日志文件，本次日志不会保存到磁盘：{error}")
+            return
         task.log_path = str(path)
-        self._log_handle = path.open("w", encoding="utf-8")
 
     def _close_log(self) -> None:
         if self._log_handle:

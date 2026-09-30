@@ -215,6 +215,17 @@ class OrchestratorClient(QObject):
 
 
 def _parse_json_payload(output: str) -> dict[str, Any] | None:
+    # Fast path: `status --json` normally prints nothing but the object, and
+    # this runs every few seconds. The scan below retries raw_decode at every
+    # "{" and is only needed when the JSON is wrapped in other output.
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError:
+        pass
+    else:
+        if isinstance(value, dict):
+            return value
+
     decoder = json.JSONDecoder()
     for index, character in enumerate(output):
         if character != "{":

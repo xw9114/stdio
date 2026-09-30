@@ -51,3 +51,10 @@ def test_status_matches_task_fails_closed_on_unverifiable_payload() -> None:
     assert status_matches_task({"status": "executing"}, "fix the bug") is False
     assert status_matches_task({"goal": 123}, "fix the bug") is False
 
+
+def test_status_matches_task_ignores_line_ending_and_edge_whitespace() -> None:
+    assert status_matches_task({"goal": "line one\r\nline two"}, "line one\nline two") is True
+    assert status_matches_task({"goal": "fix the bug"}, "  fix the bug\n") is True
+    # Only the edges are normalized; inner content must still match exactly.
+    assert status_matches_task({"goal": "line one"}, "line one\nline two") is False
+

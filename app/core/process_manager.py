@@ -126,11 +126,16 @@ class TaskProcessManager(QObject):
         self._process.start()
 
     def cancel(self) -> None:
+        # Dual Agent Studio is Windows-only (taskkill.exe, COMSPEC/.cmd
+        # routing in configure_process(), etc.), so process-tree cancellation
+        # always goes through taskkill. The terminate() fallback below only
+        # covers the unlikely race where the process has already exited
+        # between the running check above and reading its pid.
         if not self.running:
             return
         self._cancel_requested = True
         pid = self.process_id
-        if os.name == "nt" and pid > 0:
+        if pid > 0:
             self._killer = QProcess(self)
             self._killer.finished.connect(self._killer.deleteLater)
             self._killer.start("taskkill.exe", ["/pid", str(pid), "/t", "/f"])

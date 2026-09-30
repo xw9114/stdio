@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,14 +18,25 @@ def configure_process(process: QProcess, command: CommandSpec) -> None:
     environment.insert("NO_COLOR", "1")
     process.setProcessEnvironment(environment)
 
-    suffix = Path(command.program).suffix.lower()
+    program = command.program
+    if os.name == "nt":
+        # QProcess calls CreateProcess directly on Windows and does not apply
+        # the shell's PATHEXT-based lookup, so a bare name like "claude" is
+        # never resolved to the "claude.cmd" shim that npm installs on
+        # Windows (no .exe exists for it). Resolve it ourselves first so the
+        # .cmd/.bat routing below sees the real, extension-bearing file.
+        resolved = shutil.which(program)
+        if resolved:
+            program = resolved
+
+    suffix = Path(program).suffix.lower()
     if os.name == "nt" and suffix in {".cmd", ".bat"}:
         process.setProgram(os.environ.get("COMSPEC", "cmd.exe"))
-        command_line = subprocess.list2cmdline(command.as_list())
+        command_line = subprocess.list2cmdline([program, *command.arguments])
         process.setArguments(["/d", "/s", "/c", command_line])
         return
 
-    process.setProgram(command.program)
+    process.setProgram(program)
     process.setArguments(list(command.arguments))
 
 

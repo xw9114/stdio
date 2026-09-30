@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.task import AgentTask
-from app.ui.theme import ACCENT, BRAIN_COLOR, DANGER, TEXT_MUTED
+from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
 
 
 class _ThreadItem(QWidget):
@@ -46,13 +46,13 @@ class _ThreadItem(QWidget):
         dot.setFixedSize(8, 8)
         status = task.status.lower()
         if status == "passed":
-            color = ACCENT
+            color = DONE_COLOR
         elif status in {"failed", "blocked"}:
             color = DANGER
         elif status in {"running", "planning", "executing", "retrying", "reviewing"}:
-            color = BRAIN_COLOR
+            color = ACTIVE_COLOR
         else:
-            color = TEXT_MUTED
+            color = PENDING_COLOR
         dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         status_row.addWidget(dot)
         time_label = QLabel(_relative_time(task.started_at))

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from app.core.task_state import StateSnapshot, TaskPhase
 from app.models.environment import EnvironmentCheck, EnvironmentStatus
+from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
 
 
 class _StageRow(QWidget):
@@ -32,10 +33,10 @@ class _StageRow(QWidget):
 
     def set_state(self, state: str, detail: str = "") -> None:
         colors = {
-            "pending": "#48515d",
-            "active": "#d0a94f",
-            "done": "#4da785",
-            "failed": "#c6656d",
+            "pending": PENDING_COLOR,
+            "active": ACTIVE_COLOR,
+            "done": DONE_COLOR,
+            "failed": DANGER,
         }
         color = colors.get(state, colors["pending"])
         self.dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
@@ -157,7 +158,7 @@ class StatusPanel(QFrame):
         if not label:
             return
         label.setText("可用" if check.available else "不可用")
-        label.setStyleSheet(f"color: {'#65bd9b' if check.available else '#d77a82'};")
+        label.setStyleSheet(f"color: {DONE_COLOR if check.available else DANGER};")
         label.setToolTip(check.detail)
 
     def set_environment(self, status: EnvironmentStatus) -> None:

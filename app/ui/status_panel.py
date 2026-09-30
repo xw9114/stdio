@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.core.task_state import StateSnapshot, TaskPhase
 from app.models.environment import EnvironmentCheck, EnvironmentStatus
@@ -38,7 +46,25 @@ class StatusPanel(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("section")
-        layout = QVBoxLayout(self)
+
+        # Same rationale as TaskPanel: the stage rows + environment grid can
+        # need more height than a smaller/lower-resolution monitor leaves
+        # available, so this scrolls instead of risking overlapping content.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; }")
+        outer_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        scroll_area.setWidget(content)
+
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 14, 16, 16)
         layout.setSpacing(10)
 

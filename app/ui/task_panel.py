@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStyle,
     QVBoxLayout,
@@ -41,7 +42,28 @@ class TaskPanel(QFrame):
         self._parse_timer.setInterval(350)
         self._parse_timer.timeout.connect(self._apply_inference)
 
-        layout = QVBoxLayout(self)
+        # The task form's minimum content height (description box + Brain/
+        # Executor/retry controls + buttons) can exceed the space actually
+        # available - e.g. a smaller/lower-resolution monitor, or the window
+        # resized toward its declared minimum size. Without a scroll area,
+        # widgets with a hard minimum height (like description_edit below)
+        # are laid out overlapping their siblings instead of gracefully
+        # scrolling once the panel is squeezed below its natural size.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; }")
+        outer_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        scroll_area.setWidget(content)
+
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 14, 16, 16)
         layout.setSpacing(12)
 

@@ -1,0 +1,43 @@
+import json
+from pathlib import Path
+
+from app.models.settings import AppSettings
+from app.models.task import AgentTask
+from app.services.history_service import HistoryService
+from app.services.settings_service import SettingsService
+
+
+def test_settings_round_trip_and_invalid_file_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "data" / "settings.json"
+    service = SettingsService(path)
+    settings = AppSettings(project_path=r"E:\项目 空格", default_max_retries=5)
+    service.save(settings)
+    loaded = service.load()
+    assert loaded.project_path == r"E:\项目 空格"
+    assert loaded.default_max_retries == 5
+
+    path.write_text("not-json", encoding="utf-8")
+    assert service.load().default_brain == "claude"
+
+
+def test_history_keeps_latest_one_hundred_items(tmp_path: Path) -> None:
+    path = tmp_path / "history.json"
+    service = HistoryService(path)
+    for index in range(105):
+        service.add(
+            AgentTask(
+                id=f"task-{index}",
+                description=f"task {index}",
+                project_path=str(tmp_path),
+                brain="claude",
+                executor="codex",
+                max_retries=3,
+                status="passed",
+            )
+        )
+    loaded = service.load()
+    assert len(loaded) == 100
+    assert loaded[0].id == "task-104"
+    assert loaded[-1].id == "task-5"
+    assert isinstance(json.loads(path.read_text(encoding="utf-8")), list)
+

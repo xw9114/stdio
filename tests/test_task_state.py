@@ -126,3 +126,28 @@ def test_active_isolation_only_while_the_branch_is_pending() -> None:
     assert active_isolation({"isolation": {"state": "active", "path": "p"}}) is None  # incomplete
     assert active_isolation({"status": "complete"}) is None
     assert active_isolation(None) is None
+
+
+def test_usage_summary_marks_cost_as_partial_when_some_turns_are_unpriced() -> None:
+    from app.core.task_state import usage_summary
+
+    claude_only = {
+        "usage": {
+            "total": {"inputTokens": 400_000, "outputTokens": 10_000, "costUsd": 1.2185},
+            "steps": [{"label": "plan", "costUsd": 0.63}, {"label": "review", "costUsd": 0.58}],
+        }
+    }
+    assert usage_summary(claude_only) == "tokens 410.0k · 费用 $1.22"
+
+    with_codex = {
+        "usage": {
+            "total": {"inputTokens": 540_000, "outputTokens": 11_000, "costUsd": 1.2185},
+            "steps": [{"label": "plan", "costUsd": 1.2185}, {"label": "T1-execute-1"}],
+        }
+    }
+    assert usage_summary(with_codex) == "tokens 551.0k · 费用 $1.22（仅含 Claude 部分）"
+
+    codex_only = {"usage": {"total": {"inputTokens": 900, "outputTokens": 100}, "steps": [{}]}}
+    assert usage_summary(codex_only) == "tokens 1.0k"
+    assert usage_summary({"status": "complete"}) is None
+    assert usage_summary(None) is None

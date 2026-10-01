@@ -163,6 +163,36 @@ def resumable_run_id(payload: dict[str, Any] | None) -> str | None:
     return None
 
 
+def usage_summary(payload: dict[str, Any] | None) -> str | None:
+    """'tokens 141.2k · 费用 $1.22' from the run's usage ledger, if it has one.
+    Cost is only reported for Claude CLI turns, so it is labelled as partial
+    when other providers also used tokens."""
+    usage = payload.get("usage") if payload else None
+    total = usage.get("total") if isinstance(usage, dict) else None
+    if not isinstance(total, dict):
+        return None
+    tokens = sum(
+        value for value in (total.get("inputTokens"), total.get("outputTokens")) if isinstance(value, (int, float))
+    )
+    parts = [f"tokens {_compact_count(tokens)}"]
+    cost = total.get("costUsd")
+    if isinstance(cost, (int, float)):
+        steps = usage.get("steps") if isinstance(usage, dict) else None
+        unpriced = isinstance(steps, list) and any(
+            isinstance(step, dict) and "costUsd" not in step for step in steps
+        )
+        parts.append(f"费用 ${cost:.2f}" + ("（仅含 Claude 部分）" if unpriced else ""))
+    return " · ".join(parts)
+
+
+def _compact_count(value: float) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(int(value))
+
+
 def active_isolation(payload: dict[str, Any] | None) -> dict[str, str] | None:
     """The run's worktree ({"path", "branch", "base"}) while its changes sit
     on their own branch, not yet applied to nor discarded from the checkout."""

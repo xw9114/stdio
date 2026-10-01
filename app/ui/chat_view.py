@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.constants import ROUTE_LABELS
-from app.core.task_state import StateSnapshot, TaskPhase
+from app.core.task_state import StateSnapshot, TaskPhase, usage_summary
 from app.models.task import AgentTask
 from app.ui.result_panel import _duration, _result_counts
 from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
@@ -204,7 +204,10 @@ class _ResultCard(QFrame):
         duration = _duration(task.started_at, task.finished_at)
         retry_text = str(retries) if retries is not None else "未知"
         file_text = str(files) if files is not None else "未知"
-        metrics = QLabel(f"耗时 {duration} · 返工 {retry_text} · 修改文件 {file_text}")
+        usage = usage_summary(payload)
+        metrics = QLabel(
+            f"耗时 {duration} · 返工 {retry_text} · 修改文件 {file_text}" + (f" · {usage}" if usage else "")
+        )
         metrics.setObjectName("muted")
         metrics.setWordWrap(True)
         layout.addWidget(metrics)

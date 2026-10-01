@@ -1,21 +1,56 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QObject, Signal
 
 from app.core.command_builder import CommandSpec
 from app.core.process_manager import CapturedProcess
 
 
+def is_inside_repository(path: str) -> bool:
+    """Whether `path` or one of its parents holds a `.git` entry (a
+    directory, or a file for worktrees and submodules). Cheap and
+    synchronous, so the UI can ask before starting anything."""
+    current = Path(path).resolve()
+    return any((candidate / ".git").exists() for candidate in (current, *current.parents))
+
+
 class GitManager(QObject):
     refreshed = Signal(str, str)
     failed = Signal(str)
+    initialized = Signal(bool, str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._process: CapturedProcess | None = None
+        self._init_process: CapturedProcess | None = None
         self._project_path = ""
         self._status = ""
         self._pending_path: str | None = None
+
+    def init_repository(self, project_path: str) -> None:
+        """Run `git init` in `project_path`; `initialized(ok, message)`
+        reports the outcome. No commit is made: what goes into the first
+        commit is the user's call."""
+        if self._init_process and self._init_process.running:
+            return
+        process = CapturedProcess(self)
+        self._init_process = process
+
+        def finish(ok: bool, message: str) -> None:
+            if self._init_process is process:
+                self._init_process = None
+            process.deleteLater()
+            self.initialized.emit(ok, message)
+
+        process.finished.connect(
+            lambda code, stdout, stderr: finish(
+                code == 0, (stdout if code == 0 else stderr or stdout).strip()
+            )
+        )
+        process.start_failed.connect(lambda message: finish(False, f"Git 启动失败：{message}"))
+        process.start(CommandSpec("git", ("init",), project_path))
 
     def refresh(self, project_path: str) -> None:
         if self._process and self._process.running:
@@ -68,7 +103,11 @@ class GitManager(QObject):
         process = self._take_process()
         if process:
             process.deleteLater()
-        if exit_code != 0:
+        if exit_code != 0 and _is_unborn_head(stderr):
+            # A freshly initialized repository has no HEAD to diff against;
+            # the status above already lists every new file.
+            self.refreshed.emit(self._status, "[仓库还没有任何提交，暂无可对比的 Diff；新文件见上方状态]")
+        elif exit_code != 0:
             self.failed.emit(stderr.strip() or "无法读取 Git Diff。")
         else:
             self.refreshed.emit(self._status, stdout.strip() or "[no diff]")
@@ -85,4 +124,11 @@ class GitManager(QObject):
         process = self._process
         self._process = None
         return process
+
+
+def _is_unborn_head(stderr: str) -> bool:
+    lowered = stderr.lower()
+    return "head" in lowered and (
+        "bad revision" in lowered or "ambiguous argument" in lowered or "unknown revision" in lowered
+    )
 

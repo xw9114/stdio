@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.constants import AGENT_LABELS
-from app.core.git_manager import GitManager
+from app.core.git_manager import GitManager, is_inside_repository
 from app.core.orchestrator_client import OrchestratorClient
 from app.core.task_state import (
     StateSnapshot,
@@ -96,6 +96,11 @@ class MainWindow(QMainWindow):
         self._close_after_task = False
         # The plan-only run whose plan card is on screen awaiting a decision.
         self._plan_source: AgentTask | None = None
+        # What to do once a `git init` offered by _ensure_repository succeeds.
+        self._after_git_init: Callable[[], None] | None = None
+        # The orchestrator's own last error line of the current process; the
+        # only explanation when it fails before writing any run state.
+        self._last_orchestrator_error: str | None = None
 
         self.client = OrchestratorClient(self.settings.orchestrator_path, self)
         self.git_manager = GitManager(self)
@@ -229,6 +234,7 @@ class MainWindow(QMainWindow):
 
         self.git_manager.refreshed.connect(self.git_panel.set_content)
         self.git_manager.failed.connect(self.git_panel.set_error)
+        self.git_manager.initialized.connect(self._on_git_initialized)
         self.cli_detector.progress.connect(self.status_panel.set_environment_progress)
         self.cli_detector.finished.connect(self._on_environment_finished)
 
@@ -301,9 +307,55 @@ class MainWindow(QMainWindow):
         self.settings.project_path = project_path
         self._settings_service.save(self.settings)
 
-    def _initialize_project(self) -> None:
+    def _ensure_repository(self, project: str, then: Callable[[], None]) -> bool:
+        """Offer `git init` when `project` is not inside a Git repository.
+
+        The orchestrator refuses non-Git workspaces (unless its config sets
+        safety.allowNonGit) because Git is how the Executor's edits are
+        tracked and reviewed; without this the user only saw "退出码 1".
+        Returns True when the caller may continue right away; otherwise
+        `then` runs once `git init` succeeds, or never if the user cancels."""
+        if is_inside_repository(project):
+            return True
+        answer = QMessageBox.question(
+            self,
+            "不是 Git 仓库",
+            f"{project}\n不在任何 Git 仓库中。Dual Agent 用 Git 跟踪 Executor 的修改，"
+            "非 Git 目录会被拒绝运行。\n\n"
+            "是否先在这里执行 git init？（不会自动提交任何文件）\n"
+            "选“否”则不初始化直接继续（仅适用于配置了 safety.allowNonGit 的项目）。",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.No:
+            return True
+        if answer == QMessageBox.StandardButton.Yes:
+            self._after_git_init = then
+            self.statusBar().showMessage("正在执行 git init…")
+            self.git_manager.init_repository(project)
+        return False
+
+    def _on_git_initialized(self, ok: bool, message: str) -> None:
+        then, self._after_git_init = self._after_git_init, None
+        if not ok:
+            QMessageBox.warning(self, "git init 失败", message or "git init 失败。")
+            self.statusBar().showMessage("git init 失败")
+            return
+        self._append_log("System", message or "已初始化 Git 仓库。")
+        self.statusBar().showMessage("已初始化 Git 仓库")
+        self._refresh_git()
+        if then is not None:
+            then()
+
+    def _initialize_project(self, *, repository_checked: bool = False) -> None:
         project = self._valid_project_or_warn()
         if not project:
+            return
+        if not repository_checked and not self._ensure_repository(
+            project, lambda: self._initialize_project(repository_checked=True)
+        ):
             return
         config = Path(project) / "dual-agent.config.json"
         force = False
@@ -321,13 +373,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("正在初始化 Dual Agent…")
         self.client.init_project(project, force=force)
 
-    def _start_task(self) -> None:
+    def _start_task(self, *, repository_checked: bool = False) -> None:
         project = self._valid_project_or_warn()
         if not project:
             return
         description = self.task_panel.description()
         if not description:
             QMessageBox.warning(self, "缺少任务", "请输入任务描述。")
+            return
+        if not repository_checked and not self._ensure_repository(
+            project, lambda: self._start_task(repository_checked=True)
+        ):
             return
         if not Path(self.settings.orchestrator_path).is_file():
             QMessageBox.critical(
@@ -385,6 +441,7 @@ class MainWindow(QMainWindow):
         process was started."""
         self.current_task = task
         self._task_finalized = False
+        self._last_orchestrator_error = None
         self.log_panel.clear()
         self.result_panel.clear()
         self.json_view.clear()
@@ -527,7 +584,9 @@ class MainWindow(QMainWindow):
         task.exit_code = exit_code
         task.finished_at = utc_now_iso()
         task.status_json = payload
-        task.result_summary = _final_summary(phase, payload, exit_code)
+        task.result_summary = _final_summary(
+            phase, payload, exit_code, self._last_orchestrator_error
+        )
         final_snapshot = StateSnapshot(phase, task.result_summary)
         self.status_panel.set_snapshot(final_snapshot)
         self.chat_view.set_phase(final_snapshot)
@@ -562,6 +621,8 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, source: str, text: str) -> None:
         self.log_panel.append_line(source, text)
+        if source == "Error" and text.lstrip().startswith(_ORCHESTRATOR_PREFIX):
+            self._last_orchestrator_error = text.lstrip()[len(_ORCHESTRATOR_PREFIX):].strip()
         # Messages logged while no task runs (init/doctor results, client
         # errors) are not part of the conversation on screen, which may be a
         # replayed history task.
@@ -728,10 +789,14 @@ def _parse_log_line(line: str) -> tuple[str, str] | None:
     return (match.group(1), match.group(2)) if match else None
 
 
+_ORCHESTRATOR_PREFIX = "[dual-agent] "
+
+
 def _final_summary(
     phase: TaskPhase,
     payload: dict[str, object] | None,
     exit_code: int,
+    orchestrator_error: str | None = None,
 ) -> str:
     if phase == TaskPhase.PASSED:
         return "任务完成，所有步骤已通过 Brain 验收。"
@@ -743,6 +808,8 @@ def _final_summary(
         return str(payload["error"])
     if phase == TaskPhase.BLOCKED:
         return "任务已阻塞，未达到最终通过状态。"
+    if orchestrator_error:
+        return f"任务执行失败：{orchestrator_error}"
     if phase == TaskPhase.UNKNOWN:
         return "进程已结束，但无法确认最终验收状态。"
     return f"任务执行失败，退出码：{exit_code}。"

@@ -74,6 +74,7 @@ def test_full_task_flow_updates_result_status_and_history(
     _write_success_shim(orchestrator, goal)
     project_dir = tmp_path / "project"
     project_dir.mkdir()
+    (project_dir / ".git").mkdir()  # counts as a repository: no git init prompt
 
     _seed_settings(
         data_dir,
@@ -138,6 +139,7 @@ def test_unwritable_log_file_does_not_abort_task(
     _write_success_shim(orchestrator, goal)
     project_dir = tmp_path / "project"
     project_dir.mkdir()
+    (project_dir / ".git").mkdir()  # counts as a repository: no git init prompt
     _seed_settings(
         data_dir,
         orchestrator_path=str(orchestrator),
@@ -322,6 +324,7 @@ def test_start_failure_keeps_description(
     _write_success_shim(orchestrator, "anything")
     project_dir = tmp_path / "project"
     project_dir.mkdir()
+    (project_dir / ".git").mkdir()  # counts as a repository: no git init prompt
     _seed_settings(
         data_dir,
         orchestrator_path=str(orchestrator),
@@ -461,6 +464,7 @@ def test_plan_is_confirmed_before_execution_then_resumed(
     orchestrator = _write_plan_then_resume_shim(tmp_path, goal)
     project_dir = tmp_path / "project"
     project_dir.mkdir()
+    (project_dir / ".git").mkdir()  # counts as a repository: no git init prompt
     _seed_settings(
         data_dir,
         orchestrator_path=str(orchestrator),
@@ -514,4 +518,71 @@ def test_blocked_result_offers_resume_with_the_run_id(
     results = window.chat_view.findChildren(QFrame, "resultCard")
     assert results[0].resume_button is not None
     assert results[1].resume_button is None
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("answer", "expect_git", "expect_continue_now", "expect_then"),
+    [
+        (QMessageBox.StandardButton.Yes, True, False, True),
+        (QMessageBox.StandardButton.No, False, True, False),
+        (QMessageBox.StandardButton.Cancel, False, False, False),
+    ],
+)
+def test_non_git_project_offers_git_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: QMessageBox.StandardButton,
+    expect_git: bool,
+    expect_continue_now: bool,
+    expect_then: bool,
+) -> None:
+    """Regression test: a task in a non-Git folder failed with only
+    "退出码 1" because the orchestrator refuses non-Git workspaces. Studio
+    now offers `git init` first (Yes), lets allowNonGit projects through
+    (No), or stops (Cancel)."""
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    project = tmp_path / "plain-folder"
+    project.mkdir()
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: answer))
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+    continued: list[bool] = []
+    done: list[bool] = []
+    window.git_manager.initialized.connect(lambda ok, _msg: (done.append(ok), app.quit()))
+
+    proceed = window._ensure_repository(str(project), lambda: continued.append(True))
+    if expect_git:
+        QTimer.singleShot(15000, app.quit)  # safety timeout
+        app.exec()
+        assert done == [True]
+
+    assert proceed is expect_continue_now
+    assert (project / ".git").is_dir() is expect_git
+    assert bool(continued) is expect_then
+    window.close()
+
+
+def test_orchestrator_error_line_becomes_the_failure_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ui.main_window import _final_summary
+
+    assert _final_summary(TaskPhase.FAILED, None, 1, "Target workspace is not a Git repository.") == (
+        "任务执行失败：Target workspace is not a Git repository."
+    )
+    assert _final_summary(TaskPhase.FAILED, None, 1) == "任务执行失败，退出码：1。"
+    # A run's own recorded error still wins.
+    assert _final_summary(TaskPhase.FAILED, {"error": "boom"}, 1, "other") == "boom"
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3)
+    window._append_log("Error", "[dual-agent] Target workspace is not a Git repository.")
+    window._append_log("Error", "some agent warning")
+    assert window._last_orchestrator_error == "Target workspace is not a Git repository."
+    window.current_task = None
     window.close()

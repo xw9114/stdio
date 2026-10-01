@@ -87,3 +87,25 @@ def test_refresh_while_busy_coalesces_to_latest_request_instead_of_dropping(
     assert results[0][1] == f"DIFF_FOR:{project_a}"
     assert results[1][1] == f"DIFF_FOR:{project_b}"
     assert manager._pending_path is None
+
+
+def test_fresh_repository_without_commits_shows_status_not_an_error(tmp_path: Path) -> None:
+    """`git diff HEAD` fails in a repository with no commits (e.g. right
+    after Studio's git init); the panel must show the status instead."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "game.py").write_text("print('run')\n", encoding="utf-8")
+
+    app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+    manager = GitManager()
+    results: list[tuple[str, ...]] = []
+    manager.refreshed.connect(lambda status, diff: (results.append(("ok", status, diff)), app.quit()))
+    manager.failed.connect(lambda message: (results.append(("failed", message)), app.quit()))
+    manager.refresh(str(tmp_path))
+    QTimer.singleShot(15000, app.quit)
+    app.exec()
+
+    assert results and results[0][0] == "ok", results
+    assert "game.py" in results[0][1]
+    assert "还没有任何提交" in results[0][2]

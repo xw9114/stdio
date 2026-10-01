@@ -142,6 +142,7 @@ def test_run_modes_map_to_orchestrator_routes(tmp_path: Path) -> None:
         "auto": [],
         "reviewed": ["--route", "reviewed"],
         "planned": ["--route", "planned"],
+        "parallel": ["--route", "parallel"],
     }
     for mode, route_args in expected.items():
         task = _task("goal")

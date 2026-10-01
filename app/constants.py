@@ -36,10 +36,15 @@ RUN_MODES = (
     RunMode("auto", "自动", "Brain 先判断任务大小，再选择直接执行、执行后验收或拆分执行"),
     RunMode("reviewed", "执行后验收", "Executor 一次完成整个任务，Brain 独立验收，不通过就带着反馈重试"),
     RunMode("planned", "拆分执行", "Brain 拆成 2–4 个任务逐个验收，最后再整体验收一次"),
+    RunMode(
+        "parallel",
+        "并行（实验）",
+        "互不依赖的任务在各自的 worktree 里同时执行，通过验收后合并；改到同一文件会冲突。需要 worktree 隔离",
+    ),
     RunMode("single", "单 agent", "只用 Executor，不规划、不验收；用来对比效果"),
 )
 RUN_MODE_LABELS = {mode.key: mode.label for mode in RUN_MODES}
-ROUTE_LABELS = {"direct": "直接执行", "reviewed": "执行后验收", "planned": "拆分执行"}
+ROUTE_LABELS = {"direct": "直接执行", "reviewed": "执行后验收", "planned": "拆分执行", "parallel": "并行执行"}
 
 
 def normalize_run_mode(value: object) -> str:

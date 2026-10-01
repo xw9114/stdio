@@ -32,7 +32,7 @@ class CommandBuilder:
             # The orchestrator rejects --plan-only here: there is no plan.
             arguments.append("--single-agent")
         else:
-            if task.mode in {"reviewed", "planned"}:
+            if task.mode in {"reviewed", "planned", "parallel"}:
                 arguments.extend(["--route", task.mode])
             if plan_only:
                 arguments.append("--plan-only")

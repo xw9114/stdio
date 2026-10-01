@@ -109,3 +109,27 @@ def test_description_grows_then_scrolls_after_eight_lines(task_panel: TaskPanel)
 
     assert task_panel.description_edit.height() <= 200
     assert task_panel.description_edit.verticalScrollBar().maximum() > 0
+
+
+def test_narrow_composer_wraps_options_and_keeps_send_button_visible(
+    task_panel: TaskPanel,
+) -> None:
+    """Regression test: at the 900px minimum window width with the inspector
+    open, the chat column is ~420px while one row of option chips needed
+    ~600px, so the send button was pushed out of view behind a horizontal
+    scrollbar. The run options must drop to a second row instead."""
+
+    def send_fully_visible() -> bool:
+        button = task_panel.start_button
+        return button.isVisible() and button.visibleRegion().boundingRect() == button.rect()
+
+    task_panel.resize(370, 330)
+    QApplication.processEvents()
+    assert task_panel._compact
+    assert send_fully_visible()
+    assert not task_panel.scroll_area.horizontalScrollBar().isVisible()
+
+    task_panel.resize(1000, 330)
+    QApplication.processEvents()
+    assert not task_panel._compact
+    assert send_fully_visible()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
@@ -11,6 +12,7 @@ from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -25,7 +27,13 @@ from PySide6.QtWidgets import (
 from app.constants import AGENT_LABELS
 from app.core.git_manager import GitManager
 from app.core.orchestrator_client import OrchestratorClient
-from app.core.task_state import StateSnapshot, TaskPhase, final_phase, phase_from_log
+from app.core.task_state import (
+    StateSnapshot,
+    TaskPhase,
+    final_phase,
+    phase_from_log,
+    resumable_run_id,
+)
 from app.models.environment import EnvironmentStatus
 from app.models.settings import AppSettings
 from app.models.task import AgentTask, utc_now_iso
@@ -86,6 +94,8 @@ class MainWindow(QMainWindow):
         self._log_handle: TextIO | None = None
         self._task_finalized = False
         self._close_after_task = False
+        # The plan-only run whose plan card is on screen awaiting a decision.
+        self._plan_source: AgentTask | None = None
 
         self.client = OrchestratorClient(self.settings.orchestrator_path, self)
         self.git_manager = GitManager(self)
@@ -199,6 +209,10 @@ class MainWindow(QMainWindow):
         self.history_panel.task_selected.connect(self._show_history_task)
         self.inspector_toggle.toggled.connect(self._set_inspector_visible)
         self.chat_view.show_diff_requested.connect(self._show_diff)
+        self.chat_view.resume_requested.connect(self._resume_run)
+        self.chat_view.plan_approved.connect(self._approve_plan)
+        self.chat_view.plan_replan_requested.connect(self._replan)
+        self.chat_view.plan_discarded.connect(self._discard_plan)
 
         self.client.log_received.connect(self._append_log)
         self.client.task_started.connect(self._on_task_started)
@@ -330,6 +344,7 @@ class MainWindow(QMainWindow):
         self.settings.default_executor = self.task_panel.executor()
         self.settings.default_max_retries = self.task_panel.max_retries()
         self.settings.auto_detect_roles = self.task_panel.auto_detect_checkbox.isChecked()
+        self.settings.confirm_plan = self.task_panel.confirm_plan()
         self.settings.auto_scroll_logs = self.log_panel.auto_scroll.isChecked()
         self._settings_service.save(self.settings)
 
@@ -342,6 +357,32 @@ class MainWindow(QMainWindow):
             status=TaskPhase.RUNNING.value,
             started_at=utc_now_iso(),
         )
+        plan_only = self.task_panel.confirm_plan()
+        meta = _task_meta(task) + (" · 先确认计划" if plan_only else "")
+        if self._launch(
+            task,
+            lambda: self.client.run_task(task, plan_only=plan_only),
+            message=description,
+            meta=meta,
+            new_conversation=True,
+        ):
+            self.task_panel.clear_description()
+
+    def _launch(
+        self,
+        task: AgentTask,
+        start: Callable[[], None],
+        *,
+        message: str,
+        meta: str,
+        new_conversation: bool,
+    ) -> bool:
+        """Start one orchestrator process for `task` and show it in the chat.
+
+        A new conversation replaces what the chat shows; a follow-up (plan
+        approval, re-plan, resume) is appended to it so the user sees the
+        plan or blocked result it continues from. Returns whether the
+        process was started."""
         self.current_task = task
         self._task_finalized = False
         self.log_panel.clear()
@@ -352,19 +393,103 @@ class MainWindow(QMainWindow):
         starting = StateSnapshot(TaskPhase.RUNNING, "正在启动任务")
         self.status_panel.set_snapshot(starting)
         self._update_phase_pill(starting)
-        try:
-            self.client.run_task(task)
-        except (FileNotFoundError, RuntimeError) as error:
+        if new_conversation:
             self.chat_view.clear()
-            self.chat_view.add_user_message(description, _task_meta(task))
-            self._set_thread_title(description)
+            self._set_thread_title(task.description)
+        self.chat_view.add_user_message(message, meta)
+        try:
+            start()
+        except (FileNotFoundError, RuntimeError) as error:
             self._append_log("Error", str(error))
             self._finish_without_process(str(error))
+            return False
+        return True
+
+    def _follow_up_task(self, source: AgentTask, description: str | None = None) -> AgentTask:
+        # Same agents as the run being continued: stored session ids belong
+        # to those providers, whatever the composer currently selects.
+        return AgentTask(
+            description=description or source.description,
+            project_path=source.project_path,
+            brain=source.brain,
+            executor=source.executor,
+            max_retries=source.max_retries,
+            status=TaskPhase.RUNNING.value,
+            started_at=utc_now_iso(),
+        )
+
+    def _busy(self) -> bool:
+        if self.client.running:
+            QMessageBox.information(self, "任务进行中", "请等当前任务结束后再继续。")
+            return True
+        return False
+
+    def _approve_plan(self, skip: list[str], note: str) -> None:
+        source = self._plan_source
+        run_id = resumable_run_id(source.status_json) if source else None
+        if source is None or run_id is None or self._busy():
             return
-        self.chat_view.clear()
-        self.chat_view.add_user_message(description, _task_meta(task))
-        self._set_thread_title(description)
-        self.task_panel.clear_description()
+        self._plan_source = None
+        task = self._follow_up_task(source)
+        meta = "开始执行计划" + (f" · 跳过 {', '.join(skip)}" if skip else "")
+        self._launch(
+            task,
+            lambda: self.client.resume_task(task, run_id, skip=skip, note=note),
+            message=note or "按计划开始执行",
+            meta=meta,
+            new_conversation=False,
+        )
+
+    def _replan(self, note: str) -> None:
+        source = self._plan_source
+        if source is None or self._busy():
+            return
+        self._plan_source = None
+        task = self._follow_up_task(source, f"{source.description}\n\n补充说明：\n{note}")
+        self._launch(
+            task,
+            lambda: self.client.run_task(task, plan_only=True),
+            message=note,
+            meta="按补充说明重新规划",
+            new_conversation=False,
+        )
+
+    def _discard_plan(self) -> None:
+        self._plan_source = None
+        self._update_phase_pill(StateSnapshot(TaskPhase.IDLE, "计划已放弃"))
+        self.statusBar().showMessage("计划已放弃，代码未做任何修改。")
+
+    def _resume_run(self, source: AgentTask) -> None:
+        run_id = resumable_run_id(source.status_json)
+        if run_id is None or self._busy():
+            return
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            "继续执行",
+            "已完成的任务会保留，从中断的任务接着执行。\n补充说明（可选，会交给 Brain 和 Executor）：",
+        )
+        if not accepted:
+            return
+        task = self._follow_up_task(source)
+        self._launch(
+            task,
+            lambda: self.client.resume_task(task, run_id, note=note),
+            message=note.strip() or "继续执行",
+            meta="从中断处继续",
+            new_conversation=False,
+        )
+
+    def _show_outcome(self, task: AgentTask, payload: dict[str, object] | None) -> None:
+        """End of a run in the chat: a plan awaiting approval gets the plan
+        card, anything else the result card (with "继续执行" when the run
+        stopped short and can be resumed)."""
+        plan = payload.get("plan") if payload else None
+        if task.status == TaskPhase.AWAITING_APPROVAL and isinstance(plan, dict):
+            self._plan_source = task
+            self.chat_view.add_plan(plan)
+            return
+        resumable = task.status != TaskPhase.PASSED and resumable_run_id(payload) is not None
+        self.chat_view.add_result(task, payload, resumable=resumable)
 
     def _stop_task(self) -> None:
         if not self.client.running:
@@ -411,10 +536,12 @@ class MainWindow(QMainWindow):
         if payload:
             self.json_view.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
         self._append_log(
-            "Success" if phase == TaskPhase.PASSED else "Warning" if phase == TaskPhase.CANCELLED else "Error",
+            "Success"
+            if phase in {TaskPhase.PASSED, TaskPhase.AWAITING_APPROVAL}
+            else "Warning" if phase == TaskPhase.CANCELLED else "Error",
             task.result_summary,
         )
-        self.chat_view.add_result(task, payload)
+        self._show_outcome(task, payload)
         self._close_log()
         self.history = self._history_service.add(task)
         self.history_panel.set_history(self.history)
@@ -558,7 +685,7 @@ class MainWindow(QMainWindow):
                         continue
                     self._feed_chat(*parsed)
         self.phase_pill.set_full_text(task.result_summary or "历史任务")
-        self.chat_view.add_result(task, task.status_json)
+        self._show_outcome(task, task.status_json)
 
     def _valid_project_or_warn(self) -> str | None:
         project = self.task_panel.project_path()
@@ -608,6 +735,8 @@ def _final_summary(
 ) -> str:
     if phase == TaskPhase.PASSED:
         return "任务完成，所有步骤已通过 Brain 验收。"
+    if phase == TaskPhase.AWAITING_APPROVAL:
+        return "计划已生成，确认后开始修改代码。"
     if phase == TaskPhase.CANCELLED:
         return "任务已由用户取消。"
     if payload and isinstance(payload.get("error"), str):

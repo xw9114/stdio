@@ -5,6 +5,7 @@ from typing import Any
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -109,6 +110,10 @@ class _StepCard(QFrame):
             role.setObjectName("roleLabel")
             role.setProperty("role", "executor")
             header_layout.addWidget(role)
+        elif phase == TaskPhase.VERIFYING:
+            role = QLabel("验证")
+            role.setObjectName("roleLabel")
+            header_layout.addWidget(role)
 
         self.header = QToolButton()
         self.header.setObjectName("stepHeader")
@@ -164,6 +169,7 @@ class _ResultCard(QFrame):
         self,
         task: AgentTask,
         payload: dict[str, Any] | None,
+        resumable: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -200,13 +206,165 @@ class _ResultCard(QFrame):
         metrics.setWordWrap(True)
         layout.addWidget(metrics)
 
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
         self.diff_button = QPushButton("查看 Diff")
         self.diff_button.setObjectName("toolButton")
-        layout.addWidget(self.diff_button, 0, Qt.AlignmentFlag.AlignLeft)
+        buttons.addWidget(self.diff_button)
+        self.resume_button: QPushButton | None = None
+        if resumable:
+            self.resume_button = QPushButton("继续执行")
+            self.resume_button.setObjectName("primaryButton")
+            self.resume_button.setToolTip("保留已完成的任务，从中断的任务接着执行")
+            buttons.addWidget(self.resume_button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+
+class _PlanCard(QFrame):
+    """The plan of a plan-only run, waiting for the user's go-ahead.
+
+    The user can untick tasks (passed to `resume --skip`), answer the Brain's
+    questions or add guidance (`--note`), start execution, ask for a new plan
+    built from that guidance, or drop the plan. Once a choice is made the card
+    locks so the same plan cannot be started twice."""
+
+    approved = Signal(list, str)
+    replan_requested = Signal(str)
+    discarded = Signal()
+
+    def __init__(self, plan: dict[str, Any], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("planCard")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        tasks = [task for task in plan.get("tasks") or [] if isinstance(task, dict)]
+        self.title = QLabel(f"计划已就绪 · {len(tasks)} 个任务")
+        self.title.setObjectName("planTitle")
+        layout.addWidget(self.title)
+
+        summary_text = str(plan.get("summary") or "").strip()
+        if summary_text:
+            summary = _wrapped_label(summary_text)
+            summary.setObjectName("muted")
+            layout.addWidget(summary)
+
+        questions = [str(item) for item in plan.get("questions") or [] if str(item).strip()]
+        if questions:
+            heading = QLabel("Brain 的问题")
+            heading.setObjectName("planSection")
+            layout.addWidget(heading)
+            for index, question in enumerate(questions, start=1):
+                layout.addWidget(_wrapped_label(f"{index}. {question}"))
+
+        heading = QLabel("任务（取消勾选即跳过）")
+        heading.setObjectName("planSection")
+        layout.addWidget(heading)
+        self.task_checks: dict[str, QCheckBox] = {}
+        for task in tasks:
+            task_id = str(task.get("id") or "")
+            check = QCheckBox(f"{task_id}  {task.get('title') or ''}")
+            check.setObjectName("planTask")
+            check.setChecked(True)
+            check.setToolTip(_task_tooltip(task))
+            check.toggled.connect(self._update_buttons)
+            layout.addWidget(check)
+            self.task_checks[task_id] = check
+
+        self.note_edit = QPlainTextEdit()
+        self.note_edit.setObjectName("planNote")
+        self.note_edit.setPlaceholderText(
+            "回答上面的问题或补充要求（可选）。开始执行时会交给 Brain 和 Executor；"
+            "重新规划时会附加到任务描述后面。"
+        )
+        self.note_edit.setFixedHeight(76)
+        self.note_edit.textChanged.connect(self._update_buttons)
+        layout.addWidget(self.note_edit)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
+        self.approve_button = QPushButton("开始执行")
+        self.approve_button.setObjectName("primaryButton")
+        self.approve_button.clicked.connect(self._approve)
+        buttons.addWidget(self.approve_button)
+        self.replan_button = QPushButton("按补充说明重新规划")
+        self.replan_button.setObjectName("toolButton")
+        self.replan_button.clicked.connect(self._replan)
+        buttons.addWidget(self.replan_button)
+        self.discard_button = QPushButton("放弃")
+        self.discard_button.setObjectName("toolButton")
+        self.discard_button.clicked.connect(self._discard)
+        buttons.addWidget(self.discard_button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        self._update_buttons()
+
+    def skipped_ids(self) -> list[str]:
+        return [task_id for task_id, check in self.task_checks.items() if not check.isChecked()]
+
+    def note(self) -> str:
+        return self.note_edit.toPlainText().strip()
+
+    def lock(self, outcome: str) -> None:
+        self.title.setText(f"{self.title.text()} · {outcome}")
+        for widget in (
+            self.approve_button,
+            self.replan_button,
+            self.discard_button,
+            self.note_edit,
+            *self.task_checks.values(),
+        ):
+            widget.setEnabled(False)
+
+    def _update_buttons(self) -> None:
+        self.approve_button.setEnabled(
+            any(check.isChecked() for check in self.task_checks.values())
+        )
+        self.replan_button.setEnabled(bool(self.note()))
+
+    def _approve(self) -> None:
+        self.lock("已开始执行")
+        self.approved.emit(self.skipped_ids(), self.note())
+
+    def _replan(self) -> None:
+        self.lock("已重新规划")
+        self.replan_requested.emit(self.note())
+
+    def _discard(self) -> None:
+        self.lock("已放弃")
+        self.discarded.emit()
+
+
+def _wrapped_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    label.setWordWrap(True)
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    return label
+
+
+def _task_tooltip(task: dict[str, Any]) -> str:
+    lines = [str(task.get("instructions") or "").strip()]
+    criteria = [str(item) for item in task.get("acceptanceCriteria") or []]
+    if criteria:
+        lines.append("验收标准：\n" + "\n".join(f"• {item}" for item in criteria))
+    commands = [str(item) for item in task.get("validationCommands") or []]
+    if commands:
+        lines.append("验证命令：\n" + "\n".join(commands))
+    return "\n\n".join(line for line in lines if line)
 
 
 class ChatView(QWidget):
     show_diff_requested = Signal()
+    resume_requested = Signal(object)
+    plan_approved = Signal(list, str)
+    plan_replan_requested = Signal(str)
+    plan_discarded = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -275,6 +433,7 @@ class ChatView(QWidget):
             TaskPhase.PLANNING,
             TaskPhase.EXECUTING,
             TaskPhase.RETRYING,
+            TaskPhase.VERIFYING,
             TaskPhase.REVIEWING,
         }:
             key = (snapshot.phase, snapshot.attempt)
@@ -303,12 +462,26 @@ class ChatView(QWidget):
         # Failure comes from the phase flow (blocked/failed) or the result.
         self._active_card.append_line(source, text)
 
-    def add_result(self, task: AgentTask, payload: dict[str, Any] | None) -> None:
+    def add_result(
+        self, task: AgentTask, payload: dict[str, Any] | None, *, resumable: bool = False
+    ) -> None:
         ending_state = "done" if task.status == TaskPhase.PASSED else "failed"
         self._end_active(ending_state)
-        result = _ResultCard(task, payload)
+        result = _ResultCard(task, payload, resumable)
         result.diff_button.clicked.connect(self.show_diff_requested.emit)
+        if result.resume_button is not None:
+            result.resume_button.clicked.connect(lambda: self.resume_requested.emit(task))
         self._append_message(result)
+        self._active_card = None
+        self._active_key = None
+
+    def add_plan(self, plan: dict[str, Any]) -> None:
+        self._end_active("done")
+        card = _PlanCard(plan)
+        card.approved.connect(self.plan_approved.emit)
+        card.replan_requested.connect(self.plan_replan_requested.emit)
+        card.discarded.connect(self.plan_discarded.emit)
+        self._append_message(card)
         self._active_card = None
         self._active_key = None
 

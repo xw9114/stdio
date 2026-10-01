@@ -11,7 +11,9 @@ class TaskPhase(StrEnum):
     RUNNING = "running"
     PLANNING = "planning"
     EXECUTING = "executing"
+    VERIFYING = "verifying"
     REVIEWING = "reviewing"
+    AWAITING_APPROVAL = "awaiting_approval"
     RETRYING = "retrying"
     PASSED = "passed"
     BLOCKED = "blocked"
@@ -46,6 +48,11 @@ def phase_from_log(line: str) -> StateSnapshot | None:
         return StateSnapshot(TaskPhase.BLOCKED, "任务已阻塞")
     if message.startswith("all tasks passed"):
         return StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收")
+    if message.startswith("plan ready for approval"):
+        return StateSnapshot(TaskPhase.AWAITING_APPROVAL, "计划已生成，等待确认")
+    if message.startswith("verifying"):
+        attempt, _ = _parse_attempt(message)
+        return StateSnapshot(TaskPhase.VERIFYING, "正在运行验证命令", attempt)
     if message.startswith("brain is reviewing"):
         attempt, _ = _parse_attempt(message)
         return StateSnapshot(TaskPhase.REVIEWING, "Brain 正在验收修改", attempt)
@@ -64,6 +71,8 @@ def phase_from_status(payload: dict[str, Any]) -> StateSnapshot:
         return StateSnapshot(TaskPhase.PLANNING, "Brain 正在分析并制定计划")
     if status == "complete":
         return StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收")
+    if status == "awaiting_approval":
+        return StateSnapshot(TaskPhase.AWAITING_APPROVAL, "计划已生成，等待确认")
     if status == "blocked":
         return StateSnapshot(TaskPhase.BLOCKED, str(payload.get("error") or "任务已阻塞"))
     if status == "failed":
@@ -123,6 +132,8 @@ def final_phase(exit_code: int, payload: dict[str, Any] | None, cancelled: bool)
     status = str(payload.get("status") or "").lower() if payload else ""
     if exit_code == 0 and status == "complete":
         return TaskPhase.PASSED
+    if exit_code == 0 and status == "awaiting_approval":
+        return TaskPhase.AWAITING_APPROVAL
     if status == "blocked" or exit_code == 2:
         return TaskPhase.BLOCKED
     if exit_code != 0 or status == "failed":
@@ -130,11 +141,32 @@ def final_phase(exit_code: int, payload: dict[str, Any] | None, cancelled: bool)
     return TaskPhase.UNKNOWN
 
 
+_RESUMABLE_STATUSES = frozenset({"awaiting_approval", "blocked", "failed", "executing"})
+
+
+def resumable_run_id(payload: dict[str, Any] | None) -> str | None:
+    """Return the run id `dual-agent resume` can continue, if any.
+
+    Mirrors the orchestrator's own rule: the run needs a plan and must have
+    stopped short of completion ("executing" here means its process died,
+    since this is only asked once the process has exited)."""
+    if not payload or not isinstance(payload.get("plan"), dict):
+        return None
+    run_id = payload.get("runId")
+    status = str(payload.get("status") or "")
+    if isinstance(run_id, str) and run_id and status in _RESUMABLE_STATUSES:
+        return run_id
+    return None
+
+
 def _parse_attempt(line: str) -> tuple[int | None, int | None]:
     import re
 
-    match = re.search(r"attempt\s+(\d+)\s*/\s*(\d+)", line)
+    # "attempt 2/4" on Executor lines, a bare "attempt 2" on review and
+    # verification lines.
+    match = re.search(r"attempt\s+(\d+)(?:\s*/\s*(\d+))?", line)
     if not match:
         return None, None
-    return int(match.group(1)), int(match.group(2))
+    maximum = match.group(2)
+    return int(match.group(1)), int(maximum) if maximum else None
 

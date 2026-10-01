@@ -133,3 +133,18 @@ def test_narrow_composer_wraps_options_and_keeps_send_button_visible(
     QApplication.processEvents()
     assert not task_panel._compact
     assert send_fully_visible()
+
+
+def test_wide_composer_starts_on_one_row() -> None:
+    """Regression test: the row layout was decided in the panel's own
+    resizeEvent, which runs before the scroll area resizes its viewport, so
+    a freshly shown wide composer still measured its construction-time
+    width and started (and stayed) split into two rows."""
+    panel = TaskPanel()
+    panel.resize(1000, 330)
+    panel.show()
+    QApplication.processEvents()
+    try:
+        assert not panel._compact
+    finally:
+        panel.close()

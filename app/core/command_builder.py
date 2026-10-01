@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,9 +22,37 @@ class CommandBuilder:
     def __init__(self, orchestrator_path: str) -> None:
         self.orchestrator_path = str(Path(orchestrator_path).expanduser())
 
-    def build_run_command(self, task: AgentTask, *, quiet: bool = False) -> CommandSpec:
-        arguments = [
-            "run",
+    def build_run_command(
+        self, task: AgentTask, *, quiet: bool = False, plan_only: bool = False
+    ) -> CommandSpec:
+        arguments = ["run", *self._agent_arguments(task)]
+        if quiet:
+            arguments.append("--quiet")
+        if plan_only:
+            arguments.append("--plan-only")
+        arguments.append(task.description)
+        return self._spec(arguments, task.project_path)
+
+    def build_resume_command(
+        self,
+        task: AgentTask,
+        run_id: str,
+        *,
+        skip: Sequence[str] = (),
+        note: str = "",
+    ) -> CommandSpec:
+        arguments = ["resume", *self._agent_arguments(task), "--run-id", run_id]
+        if skip:
+            arguments.extend(["--skip", ",".join(skip)])
+        if note.strip():
+            # One argv element even when multi-line: the node launch path in
+            # _spec passes it through CreateProcess untouched.
+            arguments.extend(["--note", note.strip()])
+        return self._spec(arguments, task.project_path)
+
+    @staticmethod
+    def _agent_arguments(task: AgentTask) -> list[str]:
+        return [
             "--cwd",
             task.project_path,
             "--brain",
@@ -33,10 +62,6 @@ class CommandBuilder:
             "--max-retries",
             str(task.max_retries),
         ]
-        if quiet:
-            arguments.append("--quiet")
-        arguments.append(task.description)
-        return self._spec(arguments, task.project_path)
 
     def build_doctor_command(self, project_path: str) -> CommandSpec:
         return self._spec(["doctor", "--cwd", project_path], project_path)

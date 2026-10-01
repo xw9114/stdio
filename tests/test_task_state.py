@@ -3,6 +3,7 @@ from app.core.task_state import (
     final_phase,
     phase_from_log,
     phase_from_status,
+    resumable_run_id,
     status_matches_task,
 )
 
@@ -16,7 +17,10 @@ def test_parses_orchestrator_log_phases() -> None:
     assert executing.phase == TaskPhase.RETRYING
     assert executing.attempt == 2
     assert executing.max_attempts == 4
-    assert phase_from_log("[dual-agent] Brain is reviewing T1, attempt 2...").phase == TaskPhase.REVIEWING
+    reviewing = phase_from_log("[dual-agent] Brain is reviewing T1, attempt 2...")
+    assert reviewing.phase == TaskPhase.REVIEWING
+    # Review lines carry no "/max"; the attempt number must still be read.
+    assert reviewing.attempt == 2
 
 
 def test_phase_keywords_outside_orchestrator_status_lines_are_ignored() -> None:
@@ -80,3 +84,22 @@ def test_status_matches_task_ignores_line_ending_and_edge_whitespace() -> None:
     # Only the edges are normalized; inner content must still match exactly.
     assert status_matches_task({"goal": "line one"}, "line one\nline two") is False
 
+
+def test_plan_approval_and_verification_phases() -> None:
+    assert phase_from_log("[dual-agent] Plan ready for approval.").phase == TaskPhase.AWAITING_APPROVAL
+    verifying = phase_from_log("[dual-agent] Verifying T2, attempt 3...")
+    assert verifying.phase == TaskPhase.VERIFYING
+    assert verifying.attempt == 3
+    assert phase_from_status({"status": "awaiting_approval"}).phase == TaskPhase.AWAITING_APPROVAL
+    assert final_phase(0, {"status": "awaiting_approval"}, False) == TaskPhase.AWAITING_APPROVAL
+
+
+def test_resumable_run_id_follows_the_orchestrator_rule() -> None:
+    base = {"runId": "run-1", "plan": {"tasks": []}}
+    for status in ("awaiting_approval", "blocked", "failed", "executing"):
+        assert resumable_run_id({**base, "status": status}) == "run-1", status
+    assert resumable_run_id({**base, "status": "complete"}) is None
+    assert resumable_run_id({**base, "status": "planning"}) is None
+    assert resumable_run_id({"runId": "run-1", "status": "failed"}) is None  # no plan
+    assert resumable_run_id({"plan": {}, "status": "failed"}) is None  # no run id
+    assert resumable_run_id(None) is None

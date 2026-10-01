@@ -98,3 +98,27 @@ def test_forwarder_pointing_at_missing_script_is_used_unchanged(tmp_path: Path) 
     command = CommandBuilder(str(wrapper)).build_status_command(str(tmp_path))
 
     assert command.program == str(wrapper)
+
+
+def test_plan_only_and_resume_commands(tmp_path: Path) -> None:
+    builder = CommandBuilder(str(tmp_path / "missing" / "dual-agent.cmd"))
+    task = _task("Add rate limiting")
+
+    plan = builder.build_run_command(task, plan_only=True)
+    assert plan.arguments[0] == "run"
+    assert "--plan-only" in plan.arguments
+    assert plan.arguments[-1] == "Add rate limiting"
+
+    note = "Use SQLite.\nKeep the API stable."
+    resume = builder.build_resume_command(task, "run-42", skip=["T2", "T3"], note=f"  {note}\n")
+    args = list(resume.arguments)
+    assert args[0] == "resume"
+    assert args[args.index("--run-id") + 1] == "run-42"
+    assert args[args.index("--skip") + 1] == "T2,T3"
+    assert args[args.index("--note") + 1] == note
+    assert args[args.index("--brain") + 1] == "claude"
+    assert task.description not in args, "resume continues a stored run and takes no goal"
+
+    bare = builder.build_resume_command(task, "run-42")
+    assert "--skip" not in bare.arguments
+    assert "--note" not in bare.arguments

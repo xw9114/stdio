@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,25 @@ class OrchestratorClient(QObject):
             raise RuntimeError("Cannot change orchestrator path while a task is running.")
         self._builder = CommandBuilder(path)
 
-    def run_task(self, task: AgentTask) -> None:
+    def run_task(self, task: AgentTask, *, plan_only: bool = False) -> None:
+        self._start_task(task, self._builder.build_run_command(task, plan_only=plan_only))
+
+    def resume_task(
+        self,
+        task: AgentTask,
+        run_id: str,
+        *,
+        skip: Sequence[str] = (),
+        note: str = "",
+    ) -> None:
+        """Continue a stored run (an approved plan, or a blocked/failed one).
+        The task's description must be the run's goal so status polling
+        keeps matching it."""
+        self._start_task(
+            task, self._builder.build_resume_command(task, run_id, skip=skip, note=note)
+        )
+
+    def _start_task(self, task: AgentTask, command: CommandSpec) -> None:
         orchestrator = Path(self._builder.orchestrator_path)
         if not orchestrator.is_file():
             raise FileNotFoundError(f"找不到 dual-agent.cmd：{orchestrator}")
@@ -64,7 +83,7 @@ class OrchestratorClient(QObject):
             raise FileNotFoundError(f"项目目录不存在：{task.project_path}")
         self._current_task = task
         self._pending_final = None
-        self._task_process.start(self._builder.build_run_command(task))
+        self._task_process.start(command)
 
     def cancel_task(self) -> None:
         self._task_process.cancel()

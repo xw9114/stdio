@@ -333,7 +333,7 @@ def test_start_failure_keeps_description(
     window = MainWindow()
     window.task_panel.description_edit.setPlainText("保留这段任务描述")
 
-    def _fail_start(_task: AgentTask) -> None:
+    def _fail_start(_task: AgentTask, **_options: object) -> None:
         raise RuntimeError("无法启动")
 
     monkeypatch.setattr(window.client, "run_task", _fail_start)
@@ -385,4 +385,133 @@ def test_history_replay_restores_steps_and_diff(
     assert window.inspector_toggle.isChecked()
     assert not window.tabs.isHidden()
     assert window.tabs.currentWidget() == window.git_panel
+    window.close()
+
+
+def _write_plan_then_resume_shim(directory: Path, goal: str) -> Path:
+    """A fake orchestrator: `run --plan-only` stops with a plan awaiting
+    approval, `resume` completes it, `status` reports whichever happened
+    last, and every invocation's arguments are appended to args.txt."""
+    plan = {
+        "summary": "Two steps",
+        "constraints": [],
+        "questions": ["SQLite or Postgres?"],
+        "tasks": [
+            {"id": "T1", "title": "Schema", "instructions": "i", "acceptanceCriteria": [],
+             "likelyFiles": [], "validationCommands": ["npm test"]},
+            {"id": "T2", "title": "Docs", "instructions": "i", "acceptanceCriteria": [],
+             "likelyFiles": [], "validationCommands": []},
+        ],
+    }
+    for name, status in (("planned.json", "awaiting_approval"), ("complete.json", "complete")):
+        (directory / name).write_text(
+            json.dumps({"status": status, "goal": goal, "runId": "run-1", "plan": plan, "tasks": []}),
+            encoding="utf-8",
+        )
+    shim = directory / "dual-agent.cmd"
+    shim.write_text(
+        "@echo off\r\n"
+        '>> "%~dp0args.txt" echo %*\r\n'
+        'if "%1"=="run" goto :run\r\n'
+        'if "%1"=="resume" goto :resume\r\n'
+        'if "%1"=="status" goto :status\r\n'
+        "exit /b 1\r\n"
+        ":run\r\n"
+        "echo [dual-agent] Brain (claude) is planning...\r\n"
+        'copy /y "%~dp0planned.json" "%~dp0state.json" >nul\r\n'
+        "echo [dual-agent] Plan ready for approval.\r\n"
+        "exit /b 0\r\n"
+        ":resume\r\n"
+        "echo [dual-agent] Executor (codex) is running T1, attempt 1/3...\r\n"
+        "echo [dual-agent] Verifying T1, attempt 1...\r\n"
+        "echo [dual-agent]   passed: npm test\r\n"
+        "echo [dual-agent] Brain is reviewing T1, attempt 1...\r\n"
+        "echo [dual-agent] All tasks passed Brain review.\r\n"
+        'copy /y "%~dp0complete.json" "%~dp0state.json" >nul\r\n'
+        "exit /b 0\r\n"
+        ":status\r\n"
+        'type "%~dp0state.json"\r\n'
+        "exit /b 0\r\n",
+        encoding="utf-8",
+    )
+    return shim
+
+
+def _run_until_finished(window: MainWindow, app: QApplication, start) -> None:
+    finished: list[int] = []
+    connection = window.client.task_finished.connect(lambda code, *_: (finished.append(code), app.quit()))
+    start()
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(app.quit)
+    timeout.start(15000)  # safety timeout
+    app.exec()
+    timeout.stop()
+    window.client.task_finished.disconnect(connection)
+    assert finished, "orchestrator process never finished"
+
+
+def test_plan_is_confirmed_before_execution_then_resumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ui.chat_view import _PlanCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    goal = "add a database"
+    orchestrator = _write_plan_then_resume_shim(tmp_path, goal)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    _seed_settings(
+        data_dir,
+        orchestrator_path=str(orchestrator),
+        project_path=str(project_dir),
+        check_environment_on_start=False,
+        auto_detect_roles=False,
+        confirm_plan=True,
+    )
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+    window.task_panel.description_edit.setPlainText(goal)
+    _run_until_finished(window, app, window._start_task)
+
+    cards = window.chat_view.findChildren(_PlanCard)
+    assert len(cards) == 1, "a plan-only run must end with a plan card, not a result"
+    card = cards[0]
+    assert window.history[0].status == TaskPhase.AWAITING_APPROVAL.value
+    assert not window.task_panel.stop_button.isVisible()
+    assert card.task_checks.keys() == {"T1", "T2"}
+
+    card.task_checks["T2"].setChecked(False)
+    card.note_edit.setPlainText("Use SQLite")
+    _run_until_finished(window, app, card.approve_button.click)
+
+    assert not card.approve_button.isEnabled(), "an approved plan must not start twice"
+    assert window.history[0].status == TaskPhase.PASSED.value
+    assert len(window.history) == 2
+    assert len(window.chat_view.findChildren(QFrame, "stepCard")) >= 3
+    calls = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
+    run_call = next(line for line in calls if line.startswith("run "))
+    resume_call = next(line for line in calls if line.startswith("resume "))
+    assert "--plan-only" in run_call
+    assert "--run-id run-1" in resume_call
+    assert "--skip T2" in resume_call
+    assert "--note" in resume_call and "Use SQLite" in resume_call
+    window.close()
+
+
+def test_blocked_result_offers_resume_with_the_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    task = AgentTask("t", str(tmp_path), "claude", "codex", 3, status=TaskPhase.BLOCKED.value)
+
+    window._show_outcome(task, {"status": "blocked", "runId": "run-7", "plan": {"tasks": []}})
+    window._show_outcome(task, {"status": "complete", "runId": "run-8", "plan": {"tasks": []}})
+
+    results = window.chat_view.findChildren(QFrame, "resultCard")
+    assert results[0].resume_button is not None
+    assert results[1].resume_button is None
     window.close()

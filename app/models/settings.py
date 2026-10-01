@@ -16,6 +16,7 @@ class AppSettings:
     auto_scroll_logs: bool = True
     check_environment_on_start: bool = True
     auto_detect_roles: bool = True
+    confirm_plan: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -36,6 +37,7 @@ class AppSettings:
                 value.get("check_environment_on_start"), defaults.check_environment_on_start
             ),
             auto_detect_roles=_boolean(value.get("auto_detect_roles"), defaults.auto_detect_roles),
+            confirm_plan=_boolean(value.get("confirm_plan"), defaults.confirm_plan),
         )
 
 

@@ -144,6 +144,12 @@ class TaskPanel(QFrame):
             lambda checked: self._apply_inference() if checked else None
         )
         run_options.addWidget(self.auto_detect_checkbox)
+
+        self.confirm_plan_checkbox = QCheckBox("先确认计划")
+        self.confirm_plan_checkbox.setToolTip(
+            "Brain 规划完先停下，确认、删减任务或回答问题后再开始修改代码"
+        )
+        run_options.addWidget(self.confirm_plan_checkbox)
         run_options.addStretch()
 
         self.start_button = QPushButton()
@@ -195,10 +201,9 @@ class TaskPanel(QFrame):
 
         self._update_description_height()
         QTimer.singleShot(0, self._update_description_height)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._update_chip_rows()
+        # Installed last: the viewport already emits events while the
+        # widgets the filter refers to are still being built.
+        self.scroll_area.viewport().installEventFilter(self)
 
     def _update_chip_rows(self) -> None:
         composer_margins = self.composer.layout().contentsMargins()
@@ -227,13 +232,25 @@ class TaskPanel(QFrame):
         if compact == self._compact:
             return
         self._compact = compact
-        source, target = (
-            (self._chips_row, self._second_row) if compact else (self._second_row, self._chips_row)
-        )
-        source.removeWidget(self._run_options)
-        target.addWidget(self._run_options, 1)
+        if compact:
+            self._chips_row.removeWidget(self._run_options)
+            # Keep the agent pickers packed to the left instead of spread
+            # across the row the run options used to fill.
+            self._chips_row.addStretch(1)
+            self._second_row.addWidget(self._run_options, 1)
+        else:
+            self._second_row.removeWidget(self._run_options)
+            stretch = self._chips_row.takeAt(self._chips_row.count() - 1)
+            del stretch
+            self._chips_row.addWidget(self._run_options, 1)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # The viewport, not this panel, has the width the chips get: when the
+        # panel's own resizeEvent runs, the scroll area has not resized its
+        # viewport yet and still reports the previous width.
+        if watched is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
+            self._update_chip_rows()
+            return False
         if watched is self.description_edit:
             if event.type() == QEvent.Type.FocusIn:
                 self._set_composer_focused(True)
@@ -282,6 +299,7 @@ class TaskPanel(QFrame):
         self._set_combo_value(self.executor_combo, settings.default_executor)
         self.retry_spin.setValue(settings.default_max_retries)
         self.auto_detect_checkbox.setChecked(settings.auto_detect_roles)
+        self.confirm_plan_checkbox.setChecked(settings.confirm_plan)
         self._brain_manual = False
         self._executor_manual = False
         self._retry_manual = False
@@ -319,6 +337,10 @@ class TaskPanel(QFrame):
         self.brain_combo.setEnabled(not running)
         self.executor_combo.setEnabled(not running)
         self.retry_spin.setEnabled(not running)
+        self.confirm_plan_checkbox.setEnabled(not running)
+
+    def confirm_plan(self) -> bool:
+        return self.confirm_plan_checkbox.isChecked()
 
     def _apply_inference(self) -> None:
         if not self.auto_detect_checkbox.isChecked():

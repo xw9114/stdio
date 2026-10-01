@@ -173,6 +173,6 @@ def test_single_agent_mode_disables_what_it_does_not_use(task_panel: TaskPanel) 
 
 
 def test_mode_is_restored_from_settings(task_panel: TaskPanel) -> None:
-    task_panel.apply_settings(AppSettings(single_agent=True))
+    task_panel.apply_settings(AppSettings(run_mode="single"))
     assert task_panel.mode() == "single"
     assert not task_panel.brain_combo.isEnabled()

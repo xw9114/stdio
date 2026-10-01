@@ -41,3 +41,21 @@ def test_history_keeps_latest_one_hundred_items(tmp_path: Path) -> None:
     assert loaded[-1].id == "task-5"
     assert isinstance(json.loads(path.read_text(encoding="utf-8")), list)
 
+
+
+def test_run_mode_migrates_from_older_settings_and_history() -> None:
+    from app.models.settings import AppSettings
+    from app.models.task import AgentTask
+
+    assert AppSettings.from_dict({}).run_mode == "auto"
+    assert AppSettings.from_dict({"single_agent": True}).run_mode == "single"
+    assert AppSettings.from_dict({"single_agent": False}).run_mode == "auto"
+    assert AppSettings.from_dict({"run_mode": "reviewed", "single_agent": True}).run_mode == "reviewed"
+    assert AppSettings.from_dict({"run_mode": "bogus"}).run_mode == "auto"
+
+    base = {"description": "d", "project_path": "p"}
+    # Entries written before modes existed ran the multi-task plan flow.
+    assert AgentTask.from_dict(base).mode == "planned"
+    assert AgentTask.from_dict({**base, "mode": "dual"}).mode == "planned"
+    assert AgentTask.from_dict({**base, "mode": "single"}).mode == "single"
+    assert AgentTask.from_dict({**base, "mode": "auto"}).mode == "auto"

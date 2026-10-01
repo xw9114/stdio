@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from app.constants import normalize_run_mode
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -25,9 +27,9 @@ class AgentTask:
     log_path: str | None = None
     result_summary: str = ""
     status_json: dict[str, Any] | None = None
-    # "dual" (Brain plans and reviews) or "single" (Executor alone), kept in
-    # history so the two workflows can be compared on real tasks.
-    mode: str = "dual"
+    # A RUN_MODES key (auto / reviewed / planned / single), kept in history
+    # so the workflows can be compared on real tasks.
+    mode: str = "auto"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,7 +50,8 @@ class AgentTask:
             log_path=_optional_string(value.get("log_path", value.get("logPath"))),
             result_summary=str(value.get("result_summary") or ""),
             status_json=value.get("status_json") if isinstance(value.get("status_json"), dict) else None,
-            mode="single" if value.get("mode") == "single" else "dual",
+            # Entries from before modes existed ran the two-agent plan flow.
+            mode=normalize_run_mode(value.get("mode", "dual")),
         )
 
 

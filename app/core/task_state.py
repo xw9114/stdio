@@ -50,9 +50,13 @@ def phase_from_log(line: str) -> StateSnapshot | None:
         return StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收")
     if message.startswith("plan ready for approval"):
         return StateSnapshot(TaskPhase.AWAITING_APPROVAL, "计划已生成，等待确认")
+    if message.startswith("verifying the whole result"):
+        return StateSnapshot(TaskPhase.VERIFYING, "正在整体运行验证命令")
     if message.startswith("verifying"):
         attempt, _ = _parse_attempt(message)
         return StateSnapshot(TaskPhase.VERIFYING, "正在运行验证命令", attempt)
+    if message.startswith("brain is reviewing the whole result"):
+        return StateSnapshot(TaskPhase.REVIEWING, "Brain 正在整体验收")
     if message.startswith("brain is reviewing"):
         attempt, _ = _parse_attempt(message)
         return StateSnapshot(TaskPhase.REVIEWING, "Brain 正在验收修改", attempt)
@@ -157,6 +161,18 @@ def resumable_run_id(payload: dict[str, Any] | None) -> str | None:
     if isinstance(run_id, str) and run_id and status in _RESUMABLE_STATUSES:
         return run_id
     return None
+
+
+def active_isolation(payload: dict[str, Any] | None) -> dict[str, str] | None:
+    """The run's worktree ({"path", "branch", "base"}) while its changes sit
+    on their own branch, not yet applied to nor discarded from the checkout."""
+    isolation = payload.get("isolation") if payload else None
+    if not isinstance(isolation, dict) or isolation.get("state") != "active":
+        return None
+    fields = {key: isolation.get(key) for key in ("path", "branch", "base")}
+    if not all(isinstance(value, str) and value for value in fields.values()):
+        return None
+    return fields  # type: ignore[return-value]
 
 
 def _parse_attempt(line: str) -> tuple[int | None, int | None]:

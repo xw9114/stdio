@@ -134,3 +134,23 @@ def test_single_agent_run_never_asks_for_a_plan(tmp_path: Path) -> None:
     assert "--single-agent" in arguments
     assert "--plan-only" not in arguments, "the orchestrator rejects the combination"
     assert arguments[-1] == "Make a runner game"
+
+
+def test_run_modes_map_to_orchestrator_routes(tmp_path: Path) -> None:
+    builder = CommandBuilder(str(tmp_path / "missing" / "dual-agent.cmd"))
+    expected = {
+        "auto": [],
+        "reviewed": ["--route", "reviewed"],
+        "planned": ["--route", "planned"],
+    }
+    for mode, route_args in expected.items():
+        task = _task("goal")
+        task.mode = mode
+        arguments = list(builder.build_run_command(task, plan_only=True).arguments)
+        assert "--plan-only" in arguments, mode
+        assert "--single-agent" not in arguments, mode
+        if route_args:
+            index = arguments.index("--route")
+            assert arguments[index : index + 2] == route_args
+        else:
+            assert "--route" not in arguments, "auto leaves the choice to the Brain"

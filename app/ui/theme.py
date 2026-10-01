@@ -185,6 +185,8 @@ QLabel#emptyStateTitle {{ font-size: 24px; font-weight: 600; }}
 QFrame#planCard {{ background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 12px; }}
 QFrame#planCard QLabel, QFrame#planCard QCheckBox {{ background: transparent; }}
 QLabel#planTitle {{ font-weight: 600; color: {ACTIVE_COLOR}; }}
+QLabel#isolationNote {{ color: {ACTIVE_COLOR}; }}
+QLabel#planRoute {{ color: {TEXT}; font-weight: 600; }}
 QLabel#planSection {{ color: {TEXT_FAINT}; font-size: 12px; font-weight: 600; }}
 QCheckBox#planTask {{ color: {TEXT}; }}
 QCheckBox#planTask:disabled {{ color: {TEXT_MUTED}; }}

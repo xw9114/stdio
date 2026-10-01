@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.constants import DEFAULT_ORCHESTRATOR_PATH
+from app.constants import DEFAULT_ORCHESTRATOR_PATH, normalize_run_mode
 
 
 @dataclass(slots=True)
@@ -17,7 +17,7 @@ class AppSettings:
     check_environment_on_start: bool = True
     auto_detect_roles: bool = True
     confirm_plan: bool = True
-    single_agent: bool = False
+    run_mode: str = "auto"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -39,7 +39,10 @@ class AppSettings:
             ),
             auto_detect_roles=_boolean(value.get("auto_detect_roles"), defaults.auto_detect_roles),
             confirm_plan=_boolean(value.get("confirm_plan"), defaults.confirm_plan),
-            single_agent=_boolean(value.get("single_agent"), defaults.single_agent),
+            # Settings saved before run modes stored only a single_agent flag.
+            run_mode=normalize_run_mode(
+                value.get("run_mode", "single" if value.get("single_agent") is True else "auto")
+            ),
         )
 
 

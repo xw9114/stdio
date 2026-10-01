@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.constants import BRAIN_OPTIONS, EXECUTOR_OPTIONS
+from app.constants import BRAIN_OPTIONS, EXECUTOR_OPTIONS, RUN_MODES
 from app.core.natural_language_parser import NaturalLanguageParser
 from app.models.settings import AppSettings
 
@@ -106,14 +106,9 @@ class TaskPanel(QFrame):
         self._running = False
 
         self.mode_combo = _chip_combo()
-        self.mode_combo.addItem("双 agent", "dual")
-        self.mode_combo.addItem("单 agent", "single")
-        self.mode_combo.setItemData(
-            0, "Brain 规划并验收，Executor 修改代码", Qt.ItemDataRole.ToolTipRole
-        )
-        self.mode_combo.setItemData(
-            1, "只用 Executor 直接完成任务，不规划、不验收；用来对比两种方式的效果", Qt.ItemDataRole.ToolTipRole
-        )
+        for index, run_mode in enumerate(RUN_MODES):
+            self.mode_combo.addItem(run_mode.label, run_mode.key)
+            self.mode_combo.setItemData(index, run_mode.description, Qt.ItemDataRole.ToolTipRole)
         self.mode_combo.currentIndexChanged.connect(lambda _index: self._apply_mode())
         chips.addWidget(self.mode_combo)
 
@@ -319,7 +314,7 @@ class TaskPanel(QFrame):
         self.retry_spin.setValue(settings.default_max_retries)
         self.auto_detect_checkbox.setChecked(settings.auto_detect_roles)
         self.confirm_plan_checkbox.setChecked(settings.confirm_plan)
-        self._set_combo_value(self.mode_combo, "single" if settings.single_agent else "dual")
+        self._set_combo_value(self.mode_combo, settings.run_mode)
         self._apply_mode()
         self._brain_manual = False
         self._executor_manual = False
@@ -365,12 +360,12 @@ class TaskPanel(QFrame):
 
     def confirm_plan(self) -> bool:
         # A single-agent run has no plan to confirm.
-        return self.mode() == "dual" and self.confirm_plan_checkbox.isChecked()
+        return self.mode() != "single" and self.confirm_plan_checkbox.isChecked()
 
     def _apply_mode(self) -> None:
-        # Brain, retries and plan confirmation only exist in the two-agent
-        # workflow; disabling them shows what a single-agent run leaves out.
-        dual = self.mode() == "dual"
+        # Brain, retries and plan confirmation only exist when the Brain takes
+        # part; disabling them shows what a single-agent run leaves out.
+        dual = self.mode() != "single"
         editable = not self._running
         self._brain_label.setEnabled(dual)
         for widget in (self.brain_combo, self.retry_spin, self.confirm_plan_checkbox):

@@ -88,6 +88,14 @@ class OrchestratorClient(QObject):
     def cancel_task(self) -> None:
         self._task_process.cancel()
 
+    def apply_run(self, project_path: str, run_id: str) -> None:
+        """Bring an isolated run's branch into the checkout (operation "apply")."""
+        self._start_operation("apply", self._builder.build_apply_command(project_path, run_id))
+
+    def discard_run(self, project_path: str, run_id: str) -> None:
+        """Delete an isolated run's worktree and branch (operation "discard")."""
+        self._start_operation("discard", self._builder.build_discard_command(project_path, run_id))
+
     def doctor(self, project_path: str) -> None:
         self._start_operation("doctor", self._builder.build_doctor_command(project_path))
 

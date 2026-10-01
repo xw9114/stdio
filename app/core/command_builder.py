@@ -31,8 +31,11 @@ class CommandBuilder:
         if task.mode == "single":
             # The orchestrator rejects --plan-only here: there is no plan.
             arguments.append("--single-agent")
-        elif plan_only:
-            arguments.append("--plan-only")
+        else:
+            if task.mode in {"reviewed", "planned"}:
+                arguments.extend(["--route", task.mode])
+            if plan_only:
+                arguments.append("--plan-only")
         arguments.append(task.description)
         return self._spec(arguments, task.project_path)
 
@@ -65,6 +68,12 @@ class CommandBuilder:
             "--max-retries",
             str(task.max_retries),
         ]
+
+    def build_apply_command(self, project_path: str, run_id: str) -> CommandSpec:
+        return self._spec(["apply", "--cwd", project_path, "--run-id", run_id], project_path)
+
+    def build_discard_command(self, project_path: str, run_id: str) -> CommandSpec:
+        return self._spec(["discard", "--cwd", project_path, "--run-id", run_id], project_path)
 
     def build_doctor_command(self, project_path: str) -> CommandSpec:
         return self._spec(["doctor", "--cwd", project_path], project_path)

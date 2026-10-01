@@ -76,7 +76,7 @@ def test_refresh_while_busy_coalesces_to_latest_request_instead_of_dropping(
 
     # Arrives while project_a's "status" call is still sleeping.
     manager.refresh(project_b)
-    assert manager._pending_path == project_b, "second request should be queued, not dropped"
+    assert manager._pending == (project_b, "HEAD"), "second request should be queued, not dropped"
     assert manager._process is not None and manager._process.running, (
         "the in-flight process for project_a must not be replaced or duplicated"
     )
@@ -86,7 +86,7 @@ def test_refresh_while_busy_coalesces_to_latest_request_instead_of_dropping(
     assert len(results) == 2, f"expected exactly two refreshed() emissions, got {results}"
     assert results[0][1] == f"DIFF_FOR:{project_a}"
     assert results[1][1] == f"DIFF_FOR:{project_b}"
-    assert manager._pending_path is None
+    assert manager._pending is None
 
 
 def test_fresh_repository_without_commits_shows_status_not_an_error(tmp_path: Path) -> None:
@@ -108,3 +108,33 @@ def test_fresh_repository_without_commits_shows_status_not_an_error(tmp_path: Pa
     assert results and results[0][0] == "ok", results
     assert "game.py" in results[0][1]
     assert "还没有任何提交" in results[0][2]
+
+
+def test_refresh_against_a_base_shows_committed_checkpoints(tmp_path: Path) -> None:
+    """A run worktree's HEAD holds the run's own checkpoint commits, so its
+    diff must be taken against the run's starting commit, not HEAD."""
+    import subprocess
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "-C", str(tmp_path), *args],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "game.js").write_text("const speed = 1;\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "game.js").write_text("const speed = 2;\n", encoding="utf-8")
+    git("commit", "-q", "-am", "dual-agent: T1")
+
+    app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+    manager = GitManager()
+    results: list[str] = []
+    manager.refreshed.connect(lambda _status, diff: (results.append(diff), app.quit()))
+    manager.failed.connect(lambda message: (results.append(f"FAILED {message}"), app.quit()))
+    manager.refresh(str(tmp_path), base)
+    run_event_loop(app, 15000)
+
+    assert results and "+const speed = 2;" in results[0], results

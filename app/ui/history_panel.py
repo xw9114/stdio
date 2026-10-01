@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.constants import RUN_MODE_LABELS
 from app.models.task import AgentTask
 from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
 
@@ -56,7 +57,8 @@ class _ThreadItem(QWidget):
         dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         status_row.addWidget(dot)
         time_text = _relative_time(task.started_at)
-        time_label = QLabel(f"{time_text} · 单 agent" if task.mode == "single" else time_text)
+        mode = RUN_MODE_LABELS.get(task.mode) if task.mode != "auto" else None
+        time_label = QLabel(f"{time_text} · {mode}" if mode else time_text)
         time_label.setObjectName("threadItemTime")
         status_row.addWidget(time_label)
         status_row.addStretch()

@@ -26,8 +26,9 @@ class GitManager(QObject):
         self._process: CapturedProcess | None = None
         self._init_process: CapturedProcess | None = None
         self._project_path = ""
+        self._base = "HEAD"
         self._status = ""
-        self._pending_path: str | None = None
+        self._pending: tuple[str, str] | None = None
 
     def init_repository(self, project_path: str) -> None:
         """Run `git init` in `project_path`; `initialized(ok, message)`
@@ -52,27 +53,31 @@ class GitManager(QObject):
         process.start_failed.connect(lambda message: finish(False, f"Git 启动失败：{message}"))
         process.start(CommandSpec("git", ("init",), project_path))
 
-    def refresh(self, project_path: str) -> None:
+    def refresh(self, project_path: str, base: str = "HEAD") -> None:
+        """Show `project_path`'s status and its diff against `base`: HEAD for
+        the user's checkout, the run's starting commit for a run worktree
+        (whose HEAD already holds the run's own checkpoint commits)."""
         if self._process and self._process.running:
             # A status/diff round trip is already in flight. Remember only
             # the latest request instead of starting a second process or
             # silently dropping it; the in-flight cycle triggers it once it
             # finishes (see _advance_pending).
-            self._pending_path = project_path
+            self._pending = (project_path, base)
             return
-        self._pending_path = None
+        self._pending = None
         self._project_path = project_path
+        self._base = base
         self._start(
             CommandSpec("git", ("-C", project_path, "status", "--short"), project_path),
             self._on_status,
         )
 
     def _advance_pending(self) -> None:
-        if self._pending_path is None:
+        if self._pending is None:
             return
-        path = self._pending_path
-        self._pending_path = None
-        self.refresh(path)
+        path, base = self._pending
+        self._pending = None
+        self.refresh(path, base)
 
     def _start(self, command: CommandSpec, callback: object) -> None:
         process = CapturedProcess(self)
@@ -93,7 +98,7 @@ class GitManager(QObject):
         self._start(
             CommandSpec(
                 "git",
-                ("-C", self._project_path, "diff", "--no-ext-diff", "--no-color", "HEAD", "--", "."),
+                ("-C", self._project_path, "diff", "--no-ext-diff", "--no-color", self._base, "--", "."),
                 self._project_path,
             ),
             self._on_diff,

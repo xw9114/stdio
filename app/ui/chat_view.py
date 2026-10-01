@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.constants import ROUTE_LABELS
 from app.core.task_state import StateSnapshot, TaskPhase
 from app.models.task import AgentTask
 from app.ui.result_panel import _duration, _result_counts
@@ -170,10 +171,12 @@ class _ResultCard(QFrame):
         task: AgentTask,
         payload: dict[str, Any] | None,
         resumable: bool = False,
+        isolation: dict[str, str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("resultCard")
+        self.task_id = task.id
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
@@ -206,9 +209,27 @@ class _ResultCard(QFrame):
         metrics.setWordWrap(True)
         layout.addWidget(metrics)
 
+        self.isolation_label: QLabel | None = None
+        self.apply_button: QPushButton | None = None
+        self.discard_button: QPushButton | None = None
+        if isolation:
+            self.isolation_label = _wrapped_label(
+                f"改动在独立分支 {isolation['branch']} 上，尚未应用到你的工作区。"
+                "确认没问题后再应用；不想要就丢弃。"
+            )
+            self.isolation_label.setObjectName("isolationNote")
+            layout.addWidget(self.isolation_label)
+
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(8)
+        if isolation:
+            self.apply_button = QPushButton("应用到工作区")
+            self.apply_button.setObjectName("primaryButton")
+            buttons.addWidget(self.apply_button)
+            self.discard_button = QPushButton("丢弃改动")
+            self.discard_button.setObjectName("toolButton")
+            buttons.addWidget(self.discard_button)
         self.diff_button = QPushButton("查看 Diff")
         self.diff_button.setObjectName("toolButton")
         buttons.addWidget(self.diff_button)
@@ -220,6 +241,14 @@ class _ResultCard(QFrame):
             buttons.addWidget(self.resume_button)
         buttons.addStretch()
         layout.addLayout(buttons)
+
+    def settle_isolation(self, outcome: str) -> None:
+        """The run's branch was applied or discarded: say so, retire the buttons."""
+        if self.isolation_label is not None:
+            self.isolation_label.setText(outcome)
+        for button in (self.apply_button, self.discard_button):
+            if button is not None:
+                button.setEnabled(False)
 
 
 class _PlanCard(QFrame):
@@ -246,6 +275,13 @@ class _PlanCard(QFrame):
         self.title = QLabel(f"计划已就绪 · {len(tasks)} 个任务")
         self.title.setObjectName("planTitle")
         layout.addWidget(self.title)
+
+        route = ROUTE_LABELS.get(str(plan.get("route") or ""))
+        if route:
+            reason = str(plan.get("routeReason") or "").strip()
+            route_label = _wrapped_label(f"路线：{route}" + (f" — {reason}" if reason else ""))
+            route_label.setObjectName("planRoute")
+            layout.addWidget(route_label)
 
         summary_text = str(plan.get("summary") or "").strip()
         if summary_text:
@@ -362,6 +398,8 @@ def _task_tooltip(task: dict[str, Any]) -> str:
 class ChatView(QWidget):
     show_diff_requested = Signal()
     resume_requested = Signal(object)
+    apply_requested = Signal(object)
+    discard_requested = Signal(object)
     plan_approved = Signal(list, str)
     plan_replan_requested = Signal(str)
     plan_discarded = Signal()
@@ -463,17 +501,31 @@ class ChatView(QWidget):
         self._active_card.append_line(source, text)
 
     def add_result(
-        self, task: AgentTask, payload: dict[str, Any] | None, *, resumable: bool = False
+        self,
+        task: AgentTask,
+        payload: dict[str, Any] | None,
+        *,
+        resumable: bool = False,
+        isolation: dict[str, str] | None = None,
     ) -> None:
         ending_state = "done" if task.status == TaskPhase.PASSED else "failed"
         self._end_active(ending_state)
-        result = _ResultCard(task, payload, resumable)
+        result = _ResultCard(task, payload, resumable, isolation)
         result.diff_button.clicked.connect(self.show_diff_requested.emit)
         if result.resume_button is not None:
             result.resume_button.clicked.connect(lambda: self.resume_requested.emit(task))
+        if result.apply_button is not None:
+            result.apply_button.clicked.connect(lambda: self.apply_requested.emit(task))
+        if result.discard_button is not None:
+            result.discard_button.clicked.connect(lambda: self.discard_requested.emit(task))
         self._append_message(result)
         self._active_card = None
         self._active_key = None
+
+    def settle_isolation(self, task_id: str, outcome: str) -> None:
+        for message in self._messages:
+            if isinstance(message, _ResultCard) and message.task_id == task_id:
+                message.settle_isolation(outcome)
 
     def add_plan(self, plan: dict[str, Any]) -> None:
         self._end_active("done")

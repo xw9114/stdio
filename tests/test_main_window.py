@@ -620,7 +620,7 @@ def test_single_agent_run_skips_plan_confirmation_and_says_unreviewed(
         check_environment_on_start=False,
         auto_detect_roles=False,
         confirm_plan=True,
-        single_agent=True,
+        run_mode="single",
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -636,4 +636,76 @@ def test_single_agent_run_skips_plan_confirmation_and_says_unreviewed(
     assert "未经 Brain 验收" in window.history[0].result_summary
     on_disk = json.loads((data_dir / "history.json").read_text(encoding="utf-8"))
     assert on_disk[0]["mode"] == "single"
+    window.close()
+
+
+def _isolated_task(tmp_path: Path) -> AgentTask:
+    return AgentTask(
+        "make a game",
+        str(tmp_path),
+        "claude",
+        "codex",
+        3,
+        status=TaskPhase.PASSED.value,
+        status_json={
+            "status": "complete",
+            "runId": "run-9",
+            "isolation": {
+                "path": str(tmp_path / "worktree"),
+                "branch": "dual-agent/run-9",
+                "base": "abc123",
+                "state": "active",
+            },
+        },
+    )
+
+
+def test_isolated_run_offers_apply_and_settles_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False, project_path=str(tmp_path))
+    (tmp_path / "worktree").mkdir()
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+
+    window = MainWindow()
+    refreshed: list[tuple] = []
+    monkeypatch.setattr(window.git_manager, "refresh", lambda *args: refreshed.append(args))
+    applied: list[tuple[str, str]] = []
+    monkeypatch.setattr(window.client, "apply_run", lambda project, run_id: applied.append((project, run_id)))
+    task = _isolated_task(tmp_path)
+    window._show_outcome(task, task.status_json)
+
+    card = window.chat_view.findChildren(QFrame, "resultCard")[0]
+    assert card.apply_button is not None and card.discard_button is not None
+    assert "dual-agent/run-9" in card.isolation_label.text()
+
+    window._refresh_git()
+    assert refreshed[-1] == (str(tmp_path / "worktree"), "abc123"), "diff the run's worktree, not the checkout"
+
+    card.apply_button.click()
+    assert applied == [(str(tmp_path), "run-9")]
+    window._on_operation_finished("apply", True, "[dual-agent] Applied cleanly to the working tree.")
+
+    assert not card.apply_button.isEnabled()
+    assert "已应用" in card.isolation_label.text()
+    assert task.status_json["isolation"]["state"] == "applied"
+    assert window.history[0].status_json["isolation"]["state"] == "applied"
+    assert refreshed[-1] == (str(tmp_path),), "back to diffing the checkout"
+    window.close()
+
+
+def test_declining_the_confirmation_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Cancel))
+    window = MainWindow()
+    calls: list[object] = []
+    monkeypatch.setattr(window.client, "discard_run", lambda *a: calls.append(a))
+    task = _isolated_task(tmp_path)
+
+    window._discard_run(task)
+
+    assert calls == []
+    assert task.status_json["isolation"]["state"] == "active"
     window.close()

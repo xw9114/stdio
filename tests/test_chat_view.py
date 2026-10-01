@@ -149,3 +149,18 @@ def test_new_messages_preserve_manual_scroll_position(chat_view: ChatView) -> No
     QApplication.processEvents()
 
     assert scrollbar.value() == scrollbar.maximum()
+
+
+def test_plan_card_shows_the_route_and_why(chat_view: ChatView) -> None:
+    chat_view.add_plan(
+        {
+            "route": "reviewed",
+            "routeReason": "一个会话就能完成的小游戏",
+            "summary": "s",
+            "questions": [],
+            "tasks": [{"id": "T1", "title": "Whole game"}],
+        }
+    )
+    QApplication.processEvents()
+    texts = [label.text() for label in chat_view.findChildren(QLabel, "planRoute")]
+    assert texts == ["路线：执行后验收 — 一个会话就能完成的小游戏"]

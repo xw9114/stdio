@@ -24,12 +24,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.constants import AGENT_LABELS
+from app.constants import AGENT_LABELS, RUN_MODE_LABELS
 from app.core.git_manager import GitManager, is_inside_repository
 from app.core.orchestrator_client import OrchestratorClient
 from app.core.task_state import (
     StateSnapshot,
     TaskPhase,
+    active_isolation,
     final_phase,
     phase_from_log,
     resumable_run_id,
@@ -101,6 +102,10 @@ class MainWindow(QMainWindow):
         # The orchestrator's own last error line of the current process; the
         # only explanation when it fails before writing any run state.
         self._last_orchestrator_error: str | None = None
+        # The worktree of the run shown in the chat, while not yet applied.
+        self._shown_isolation: dict[str, str] | None = None
+        # The task and action ("apply"/"discard") of an operation in flight.
+        self._settling: tuple[AgentTask, str] | None = None
 
         self.client = OrchestratorClient(self.settings.orchestrator_path, self)
         self.git_manager = GitManager(self)
@@ -218,6 +223,8 @@ class MainWindow(QMainWindow):
         self.chat_view.plan_approved.connect(self._approve_plan)
         self.chat_view.plan_replan_requested.connect(self._replan)
         self.chat_view.plan_discarded.connect(self._discard_plan)
+        self.chat_view.apply_requested.connect(self._apply_run)
+        self.chat_view.discard_requested.connect(self._discard_run)
 
         self.client.log_received.connect(self._append_log)
         self.client.task_started.connect(self._on_task_started)
@@ -263,6 +270,7 @@ class MainWindow(QMainWindow):
         if self.client.running:
             return
         self.chat_view.clear()
+        self._shown_isolation = None
         self.result_panel.clear()
         self.log_panel.clear()
         self.json_view.clear()
@@ -401,7 +409,7 @@ class MainWindow(QMainWindow):
         self.settings.default_max_retries = self.task_panel.max_retries()
         self.settings.auto_detect_roles = self.task_panel.auto_detect_checkbox.isChecked()
         self.settings.confirm_plan = self.task_panel.confirm_plan_checkbox.isChecked()
-        self.settings.single_agent = self.task_panel.mode() == "single"
+        self.settings.run_mode = self.task_panel.mode()
         self.settings.auto_scroll_logs = self.log_panel.auto_scroll.isChecked()
         self._settings_service.save(self.settings)
 
@@ -454,6 +462,7 @@ class MainWindow(QMainWindow):
         self._update_phase_pill(starting)
         if new_conversation:
             self.chat_view.clear()
+            self._shown_isolation = None
             self._set_thread_title(task.description)
         self.chat_view.add_user_message(message, meta)
         try:
@@ -543,13 +552,16 @@ class MainWindow(QMainWindow):
         """End of a run in the chat: a plan awaiting approval gets the plan
         card, anything else the result card (with "继续执行" when the run
         stopped short and can be resumed)."""
+        self._shown_isolation = None
         plan = payload.get("plan") if payload else None
         if task.status == TaskPhase.AWAITING_APPROVAL and isinstance(plan, dict):
             self._plan_source = task
             self.chat_view.add_plan(plan)
             return
         resumable = task.status != TaskPhase.PASSED and resumable_run_id(payload) is not None
-        self.chat_view.add_result(task, payload, resumable=resumable)
+        isolation = active_isolation(payload)
+        self._shown_isolation = isolation
+        self.chat_view.add_result(task, payload, resumable=resumable, isolation=isolation)
 
     def _stop_task(self) -> None:
         if not self.client.running:
@@ -671,6 +683,13 @@ class MainWindow(QMainWindow):
             self._log_handle = None
 
     def _refresh_git(self) -> None:
+        # While the shown run's changes sit on their own branch, the diff
+        # worth showing is that worktree against the run's starting point;
+        # the checkout itself has not changed.
+        isolation = self._shown_isolation
+        if isolation and Path(isolation["path"]).is_dir():
+            self.git_manager.refresh(isolation["path"], isolation["base"])
+            return
         project = self.task_panel.project_path()
         if not project or not Path(project).is_dir():
             self.git_panel.set_error("请选择有效项目目录。")
@@ -692,7 +711,75 @@ class MainWindow(QMainWindow):
         self.status_panel.set_environment(status)
         self.statusBar().showMessage("环境检查完成" if status.ready else "环境检查发现问题")
 
+    def _apply_run(self, task: AgentTask) -> None:
+        self._settle_run(task, "apply")
+
+    def _discard_run(self, task: AgentTask) -> None:
+        self._settle_run(task, "discard")
+
+    def _settle_run(self, task: AgentTask, action: str) -> None:
+        """Apply an isolated run's branch to the checkout, or throw it away."""
+        isolation = active_isolation(task.status_json)
+        run_id = task.status_json.get("runId") if task.status_json else None
+        if isolation is None or not isinstance(run_id, str) or self._busy():
+            return
+        if action == "apply":
+            question = (
+                f"把分支 {isolation['branch']} 上的改动应用到你的工作区？\n\n"
+                "如果你在运行期间改过同样的地方，会用三方合并处理，可能需要你解决冲突。"
+            )
+        else:
+            question = f"丢弃分支 {isolation['branch']} 上的全部改动？\n\n删除后无法恢复。"
+        answer = QMessageBox.question(
+            self,
+            "应用到工作区" if action == "apply" else "丢弃改动",
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._settling = (task, action)
+        self.statusBar().showMessage("正在应用改动…" if action == "apply" else "正在丢弃改动…")
+        if action == "apply":
+            self.client.apply_run(task.project_path, run_id)
+        else:
+            self.client.discard_run(task.project_path, run_id)
+
+    def _on_settled(self, success: bool, output: str) -> None:
+        task, action = self._settling or (None, "")
+        self._settling = None
+        if task is None:
+            return
+        if not success:
+            QMessageBox.warning(self, "操作失败", output or "操作失败。")
+            self._append_log("Error", output or f"{action} 失败。")
+            return
+        # Record the outcome in the task's stored status so history replays
+        # no longer offer to apply or discard it.
+        state = "applied" if action == "apply" else "discarded"
+        if task.status_json and isinstance(task.status_json.get("isolation"), dict):
+            task.status_json["isolation"]["state"] = state
+            self.history = self._history_service.add(task)
+            self.history_panel.set_history(self.history)
+        conflicts = "conflict" in output.lower()
+        outcome = (
+            "改动已应用到你的工作区，但有冲突需要你手动解决。"
+            if conflicts
+            else "改动已应用到你的工作区。" if action == "apply" else "改动已丢弃，工作区未受影响。"
+        )
+        self.chat_view.settle_isolation(task.id, outcome)
+        self._shown_isolation = None
+        self._append_log("System", output or outcome)
+        self.statusBar().showMessage(outcome)
+        if conflicts:
+            QMessageBox.warning(self, "需要解决冲突", output)
+        self._refresh_git()
+
     def _on_operation_finished(self, name: str, success: bool, output: str) -> None:
+        if name in {"apply", "discard"}:
+            self._on_settled(success, output)
+            return
         title = "环境检查" if name == "doctor" else "项目初始化"
         if success:
             QMessageBox.information(self, title, output or "操作完成。")
@@ -786,7 +873,8 @@ def _task_meta(task: AgentTask) -> str:
     if task.mode == "single":
         return f"单 agent · {executor} · 不规划、不验收"
     brain = AGENT_LABELS.get(task.brain, task.brain)
-    return f"{brain} → {executor} · 最多返工 {task.max_retries} 次"
+    mode = RUN_MODE_LABELS.get(task.mode, task.mode)
+    return f"{brain} → {executor} · {mode} · 最多返工 {task.max_retries} 次"
 
 
 def _parse_log_line(line: str) -> tuple[str, str] | None:
@@ -805,6 +893,8 @@ def _final_summary(
 ) -> str:
     if phase == TaskPhase.PASSED and payload and payload.get("mode") == "single":
         return "Executor 已完成任务（单 agent 模式，未经 Brain 验收）。"
+    if phase == TaskPhase.PASSED and payload and payload.get("route") == "direct":
+        return "Executor 已完成任务（Brain 判断为小改动，直接执行，未经验收）。"
     if phase == TaskPhase.PASSED:
         return "任务完成，所有步骤已通过 Brain 验收。"
     if phase == TaskPhase.AWAITING_APPROVAL:

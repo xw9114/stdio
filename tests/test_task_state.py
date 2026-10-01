@@ -103,3 +103,26 @@ def test_resumable_run_id_follows_the_orchestrator_rule() -> None:
     assert resumable_run_id({"runId": "run-1", "status": "failed"}) is None  # no plan
     assert resumable_run_id({"plan": {}, "status": "failed"}) is None  # no run id
     assert resumable_run_id(None) is None
+
+
+def test_whole_result_review_and_verification_phases() -> None:
+    review = phase_from_log("[dual-agent] Brain is reviewing the whole result against the goal...")
+    assert review.phase == TaskPhase.REVIEWING
+    assert review.message == "Brain 正在整体验收"
+    verify = phase_from_log("[dual-agent] Verifying the whole result...")
+    assert verify.phase == TaskPhase.VERIFYING
+    assert verify.message == "正在整体运行验证命令"
+    # Route lines are informational, not a phase.
+    assert phase_from_log("[dual-agent] Route: reviewed - one session is enough") is None
+
+
+def test_active_isolation_only_while_the_branch_is_pending() -> None:
+    from app.core.task_state import active_isolation
+
+    worktree = {"path": "C:/runs/r1/worktree", "branch": "dual-agent/r1", "base": "abc123"}
+    assert active_isolation({"isolation": {**worktree, "state": "active"}}) == worktree
+    assert active_isolation({"isolation": {**worktree, "state": "applied"}}) is None
+    assert active_isolation({"isolation": {**worktree, "state": "discarded"}}) is None
+    assert active_isolation({"isolation": {"state": "active", "path": "p"}}) is None  # incomplete
+    assert active_isolation({"status": "complete"}) is None
+    assert active_isolation(None) is None

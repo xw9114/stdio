@@ -297,9 +297,11 @@ class ChatView(QWidget):
             self._active_card.set_state("active")
             self._active_key = None
             self._append_message(self._active_card)
+        # stderr ("Error" source) is deliberately not treated as failure:
+        # agents write routine warnings there (Codex prints dozens of skill
+        # loading errors on every start), which turned every card red.
+        # Failure comes from the phase flow (blocked/failed) or the result.
         self._active_card.append_line(source, text)
-        if source == "Error":
-            self._active_card.set_state("failed")
 
     def add_result(self, task: AgentTask, payload: dict[str, Any] | None) -> None:
         ending_state = "done" if task.status == TaskPhase.PASSED else "failed"

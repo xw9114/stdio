@@ -19,6 +19,28 @@ def test_parses_orchestrator_log_phases() -> None:
     assert phase_from_log("[dual-agent] Brain is reviewing T1, attempt 2...").phase == TaskPhase.REVIEWING
 
 
+def test_phase_keywords_outside_orchestrator_status_lines_are_ignored() -> None:
+    """Regression test from a real run: Codex's JSON events embed the
+    output of commands it runs, so `Get-Content tests/test_main_window.py`
+    carried the fake "[dual-agent] Brain (claude) is planning..." lines of
+    that test file and opened bogus planning cards mid-run. Only the
+    orchestrator's own `[dual-agent] ` status lines may drive phases."""
+    embedded = (
+        '{"type":"item.completed","item":{"type":"command_execution",'
+        '"aggregated_output":"echo [dual-agent] Brain (claude) is planning...\\n"}}'
+    )
+    assert phase_from_log(embedded) is None
+    assert phase_from_log("Codex says: all tasks passed, run blocked? no") is None
+    assert phase_from_log("  [dual-agent] Brain (claude) is planning...").phase == TaskPhase.PLANNING
+
+
+def test_blocked_reason_mentioning_other_phases_is_still_blocked() -> None:
+    line = "[dual-agent] Run blocked: Executor (codex) is running out of time; Brain (claude) is planning"
+    snapshot = phase_from_log(line)
+    assert snapshot is not None
+    assert snapshot.phase == TaskPhase.BLOCKED
+
+
 def test_status_json_drives_phase_without_guessing() -> None:
     payload = {
         "status": "executing",

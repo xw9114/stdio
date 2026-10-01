@@ -13,7 +13,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QMessageBox
 
 import app.utils.paths as paths_module
-from app.core.task_state import TaskPhase
+from app.core.task_state import TaskPhase, phase_from_status
 from app.models.settings import AppSettings
 from app.models.task import AgentTask
 from app.services.settings_service import SettingsService
@@ -225,6 +225,87 @@ def test_new_task_resets_chat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     assert window.chat_view.message_count() == 0
     assert window.thread_title.text() == "新任务"
+    window.close()
+
+
+def test_status_polling_does_not_add_step_cards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for duplicate step cards seen in a real run: the
+    3-second `status --json` poll also emitted phase_changed, and a poll that
+    lagged behind the log (still "executing" after the log moved on to
+    review) or reported a between-tasks state the log never prints each
+    opened an extra card. Step cards must follow the ordered log only."""
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    _seed_settings(data_dir, orchestrator_path=str(orchestrator), check_environment_on_start=False)
+
+    window = MainWindow()
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3)
+    window._append_log("Process", "[dual-agent] Executor (codex) is running T1, attempt 1/3...")
+    window._append_log("Process", "[dual-agent] Brain is reviewing T1, attempt 1...")
+    assert len(window.chat_view.findChildren(QFrame, "stepCard")) == 2
+    assert window.phase_pill.toolTip() == "Brain 正在验收修改"
+
+    stale = {
+        "status": "executing",
+        "tasks": [{"status": "running", "attempts": [{"number": 1}]}],
+    }
+    between_tasks = {"status": "executing", "tasks": [{"status": "complete"}]}
+    window.client.phase_changed.emit(phase_from_status(stale))
+    window.client.phase_changed.emit(phase_from_status(between_tasks))
+
+    assert len(window.chat_view.findChildren(QFrame, "stepCard")) == 2
+    assert window.phase_pill.toolTip() == "Brain 正在验收修改"
+    window.current_task = None
+    window.close()
+
+
+def test_stderr_noise_does_not_mark_step_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test from a real run: Codex prints dozens of "failed to
+    load skill" warnings on stderr at startup, which Studio labels [Error].
+    Every Executor card turned red although all of them passed review.
+    stderr is not a failure signal; the phase/result flow decides that."""
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    _seed_settings(data_dir, orchestrator_path=str(orchestrator), check_environment_on_start=False)
+
+    window = MainWindow()
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3)
+    window._append_log("Process", "[dual-agent] Executor (codex) is running T1, attempt 1/3...")
+    window._append_log("Error", "ERROR codex_core::session: failed to load skill SKILL.md")
+    window._append_log("Process", "[dual-agent] Brain is reviewing T1, attempt 1...")
+
+    executor_card = window.chat_view.findChildren(QFrame, "stepCard")[0]
+    assert executor_card.state == "done"
+    assert "failed to load skill" in executor_card.log.toPlainText()
+    window.current_task = None
+    window.close()
+
+
+def test_idle_errors_do_not_add_cards_to_the_shown_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed init/doctor or a client error while no task runs used to be
+    appended to whatever conversation was on screen (e.g. a replayed history
+    task) as a stray "准备中" card. It belongs in the log panel only."""
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    orchestrator = tmp_path / "dual-agent.cmd"
+    _write_success_shim(orchestrator, "anything")
+    _seed_settings(data_dir, orchestrator_path=str(orchestrator), check_environment_on_start=False)
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok)
+    )
+
+    window = MainWindow()
+    window._on_operation_finished("init", False, "init failed: config exists")
+
+    assert window.chat_view.message_count() == 0
+    assert "init failed" in window.log_panel.editor.toPlainText()
     window.close()
 
 

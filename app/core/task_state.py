@@ -28,21 +28,33 @@ class StateSnapshot:
     max_attempts: int | None = None
 
 
+_STATUS_PREFIX = "[dual-agent] "
+
+
 def phase_from_log(line: str) -> StateSnapshot | None:
-    lowered = line.lower()
-    if "is planning" in lowered:
+    # Only the orchestrator's own status lines (`[dual-agent] <message>`, see
+    # its cli.ts onStatus) may drive phases, matched from the start of the
+    # message. Agents' event streams embed arbitrary command output - Codex
+    # reading a test file full of fake "[dual-agent] ... is planning" lines
+    # opened bogus planning cards mid-run - and a "Run blocked: <reason>"
+    # reason can itself mention other phases, so it is checked first.
+    stripped = line.lstrip()
+    if not stripped.startswith(_STATUS_PREFIX):
+        return None
+    message = stripped[len(_STATUS_PREFIX):].lower()
+    if message.startswith("run blocked"):
+        return StateSnapshot(TaskPhase.BLOCKED, "任务已阻塞")
+    if message.startswith("all tasks passed"):
+        return StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收")
+    if message.startswith("brain is reviewing"):
+        attempt, _ = _parse_attempt(message)
+        return StateSnapshot(TaskPhase.REVIEWING, "Brain 正在验收修改", attempt)
+    if message.startswith("brain") and " is planning" in message:
         return StateSnapshot(TaskPhase.PLANNING, "Brain 正在分析并制定计划")
-    if "executor" in lowered and "is running" in lowered:
-        attempt, maximum = _parse_attempt(lowered)
+    if message.startswith("executor") and " is running" in message:
+        attempt, maximum = _parse_attempt(message)
         phase = TaskPhase.RETRYING if attempt and attempt > 1 else TaskPhase.EXECUTING
         return StateSnapshot(phase, "Executor 正在修改并验证", attempt, maximum)
-    if "brain is reviewing" in lowered:
-        attempt, _ = _parse_attempt(lowered)
-        return StateSnapshot(TaskPhase.REVIEWING, "Brain 正在验收修改", attempt)
-    if "all tasks passed" in lowered:
-        return StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收")
-    if "run blocked" in lowered:
-        return StateSnapshot(TaskPhase.BLOCKED, "任务已阻塞")
     return None
 
 

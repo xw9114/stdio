@@ -67,7 +67,7 @@ def test_phase_transitions_create_distinct_cards_without_polling_duplicates(
     assert cards[2].state == "done"
 
 
-def test_log_without_phase_creates_card_and_error_marks_it_failed(chat_view: ChatView) -> None:
+def test_log_without_phase_creates_card_and_stderr_does_not_fail_it(chat_view: ChatView) -> None:
     chat_view.append_log("Executor", "开始处理")
     QApplication.processEvents()
 
@@ -82,6 +82,10 @@ def test_log_without_phase_creates_card_and_error_marks_it_failed(chat_view: Cha
     assert cards[0].log.isVisible()
     chat_view.append_log("Error", "执行失败")
     assert cards[0].line_count() == 2
+    # stderr lines are recorded but do not decide failure (agents write
+    # routine warnings there); the blocked/failed phase or result does.
+    assert cards[0].state == "active"
+    chat_view.set_phase(StateSnapshot(TaskPhase.FAILED, "任务执行失败"))
     assert cards[0].state == "failed"
 
 

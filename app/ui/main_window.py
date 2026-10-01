@@ -202,9 +202,12 @@ class MainWindow(QMainWindow):
 
         self.client.log_received.connect(self._append_log)
         self.client.task_started.connect(self._on_task_started)
+        # Only the inspector's workflow panel follows phase_changed, because
+        # that signal also carries the 3-second `status --json` poll. The poll
+        # can lag behind the log or report between-task states the log never
+        # prints, and each such snapshot opened a duplicate step card. Chat
+        # cards and the header pill are driven by log lines (_feed_chat).
         self.client.phase_changed.connect(self.status_panel.set_snapshot)
-        self.client.phase_changed.connect(self.chat_view.set_phase)
-        self.client.phase_changed.connect(self._update_phase_pill)
         self.client.status_updated.connect(self._on_status_updated)
         self.client.task_finished.connect(self._on_task_finished)
         self.client.operation_finished.connect(self._on_operation_finished)
@@ -432,15 +435,28 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, source: str, text: str) -> None:
         self.log_panel.append_line(source, text)
-        if source != "System":
-            if source == "Process":
-                snapshot = phase_from_log(text)
-                if snapshot:
-                    self.chat_view.set_phase(snapshot)
-            self.chat_view.append_log(source, text)
+        # Messages logged while no task runs (init/doctor results, client
+        # errors) are not part of the conversation on screen, which may be a
+        # replayed history task.
+        if self.current_task is not None:
+            self._feed_chat(source, text)
         if self._log_handle:
             self._log_handle.write(f"[{source}] {text}\n")
             self._log_handle.flush()
+
+    def _feed_chat(self, source: str, text: str) -> None:
+        """Route one log line into the chat: phase lines open step cards and
+        update the header pill, everything except System lines is appended
+        to the active card. Shared by live runs and history replay so both
+        render the same conversation."""
+        if source == "System":
+            return
+        if source == "Process":
+            snapshot = phase_from_log(text)
+            if snapshot:
+                self.chat_view.set_phase(snapshot)
+                self._update_phase_pill(snapshot)
+        self.chat_view.append_log(source, text)
 
     def _open_log(self, task: AgentTask) -> None:
         filename = f"{task.started_at[:19].replace(':', '').replace('T', '_')}_{task.id[:8]}.log"
@@ -522,7 +538,6 @@ class MainWindow(QMainWindow):
         self.chat_view.clear()
         self.chat_view.add_user_message(task.description, _task_meta(task))
         self._set_thread_title(task.description)
-        self.phase_pill.set_full_text(task.result_summary or "历史任务")
         self.result_panel.set_task(task, task.status_json)
         self.json_view.setPlainText(
             json.dumps(task.status_json, ensure_ascii=False, indent=2)
@@ -541,14 +556,8 @@ class MainWindow(QMainWindow):
                     parsed = _parse_log_line(line)
                     if parsed is None:
                         continue
-                    source, text = parsed
-                    if source == "System":
-                        continue
-                    if source == "Process":
-                        snapshot = phase_from_log(text)
-                        if snapshot:
-                            self.chat_view.set_phase(snapshot)
-                    self.chat_view.append_log(source, text)
+                    self._feed_chat(*parsed)
+        self.phase_pill.set_full_text(task.result_summary or "历史任务")
         self.chat_view.add_result(task, task.status_json)
 
     def _valid_project_or_warn(self) -> str | None:

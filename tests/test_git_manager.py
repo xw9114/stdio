@@ -8,9 +8,10 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QTimer
+from PySide6.QtCore import QCoreApplication
 
 from app.core.git_manager import GitManager
+from qt_helpers import run_event_loop
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="uses a Windows .cmd shim to fake git")
 
@@ -80,8 +81,7 @@ def test_refresh_while_busy_coalesces_to_latest_request_instead_of_dropping(
         "the in-flight process for project_a must not be replaced or duplicated"
     )
 
-    QTimer.singleShot(15000, app.quit)  # safety timeout
-    app.exec()
+    run_event_loop(app, 15000)
 
     assert len(results) == 2, f"expected exactly two refreshed() emissions, got {results}"
     assert results[0][1] == f"DIFF_FOR:{project_a}"
@@ -103,8 +103,7 @@ def test_fresh_repository_without_commits_shows_status_not_an_error(tmp_path: Pa
     manager.refreshed.connect(lambda status, diff: (results.append(("ok", status, diff)), app.quit()))
     manager.failed.connect(lambda message: (results.append(("failed", message)), app.quit()))
     manager.refresh(str(tmp_path))
-    QTimer.singleShot(15000, app.quit)
-    app.exec()
+    run_event_loop(app, 15000)
 
     assert results and results[0][0] == "ok", results
     assert "game.py" in results[0][1]

@@ -122,3 +122,15 @@ def test_plan_only_and_resume_commands(tmp_path: Path) -> None:
     bare = builder.build_resume_command(task, "run-42")
     assert "--skip" not in bare.arguments
     assert "--note" not in bare.arguments
+
+
+def test_single_agent_run_never_asks_for_a_plan(tmp_path: Path) -> None:
+    builder = CommandBuilder(str(tmp_path / "missing" / "dual-agent.cmd"))
+    task = _task("Make a runner game")
+    task.mode = "single"
+
+    arguments = builder.build_run_command(task, plan_only=True).arguments
+
+    assert "--single-agent" in arguments
+    assert "--plan-only" not in arguments, "the orchestrator rejects the combination"
+    assert arguments[-1] == "Make a runner game"

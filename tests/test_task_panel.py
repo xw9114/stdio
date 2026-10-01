@@ -148,3 +148,31 @@ def test_wide_composer_starts_on_one_row() -> None:
         assert not panel._compact
     finally:
         panel.close()
+
+
+def test_single_agent_mode_disables_what_it_does_not_use(task_panel: TaskPanel) -> None:
+    task_panel.confirm_plan_checkbox.setChecked(True)
+    task_panel.mode_combo.setCurrentIndex(task_panel.mode_combo.findData("single"))
+
+    assert task_panel.mode() == "single"
+    assert not task_panel.brain_combo.isEnabled()
+    assert not task_panel.retry_spin.isEnabled()
+    assert not task_panel.confirm_plan_checkbox.isEnabled()
+    assert task_panel.confirm_plan() is False
+    assert task_panel.executor_combo.isEnabled()
+
+    task_panel.set_running(True)
+    assert not task_panel.mode_combo.isEnabled()
+    task_panel.set_running(False)
+    assert task_panel.mode_combo.isEnabled()
+    assert not task_panel.brain_combo.isEnabled(), "still single-agent after a run"
+
+    task_panel.mode_combo.setCurrentIndex(task_panel.mode_combo.findData("dual"))
+    assert task_panel.brain_combo.isEnabled()
+    assert task_panel.confirm_plan() is True
+
+
+def test_mode_is_restored_from_settings(task_panel: TaskPanel) -> None:
+    task_panel.apply_settings(AppSettings(single_agent=True))
+    assert task_panel.mode() == "single"
+    assert not task_panel.brain_combo.isEnabled()

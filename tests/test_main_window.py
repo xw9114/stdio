@@ -18,6 +18,7 @@ from app.models.settings import AppSettings
 from app.models.task import AgentTask
 from app.services.settings_service import SettingsService
 from app.ui.main_window import MainWindow, _parse_log_line
+from qt_helpers import run_event_loop
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="uses a Windows .cmd shim and real QWidgets")
 
@@ -555,8 +556,7 @@ def test_non_git_project_offers_git_init(
 
     proceed = window._ensure_repository(str(project), lambda: continued.append(True))
     if expect_git:
-        QTimer.singleShot(15000, app.quit)  # safety timeout
-        app.exec()
+        run_event_loop(app, 15000)
         assert done == [True]
 
     assert proceed is expect_continue_now
@@ -585,4 +585,55 @@ def test_orchestrator_error_line_becomes_the_failure_summary(
     window._append_log("Error", "some agent warning")
     assert window._last_orchestrator_error == "Target workspace is not a Git repository."
     window.current_task = None
+    window.close()
+
+
+def test_single_agent_run_skips_plan_confirmation_and_says_unreviewed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    goal = "make a runner game"
+    (tmp_path / "state.json").write_text(
+        json.dumps({"status": "complete", "mode": "single", "goal": goal, "runId": "r", "plan": {}}),
+        encoding="utf-8",
+    )
+    orchestrator = tmp_path / "dual-agent.cmd"
+    orchestrator.write_text(
+        "@echo off\r\n"
+        '>> "%~dp0args.txt" echo %*\r\n'
+        'if "%1"=="status" goto :status\r\n'
+        "echo [dual-agent] Executor (codex) is running T1, attempt 1/1...\r\n"
+        "echo [dual-agent] Executor finished (single-agent run, no Brain review).\r\n"
+        "exit /b 0\r\n"
+        ":status\r\n"
+        'type "%~dp0state.json"\r\n'
+        "exit /b 0\r\n",
+        encoding="utf-8",
+    )
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".git").mkdir()
+    _seed_settings(
+        data_dir,
+        orchestrator_path=str(orchestrator),
+        project_path=str(project_dir),
+        check_environment_on_start=False,
+        auto_detect_roles=False,
+        confirm_plan=True,
+        single_agent=True,
+    )
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+    window.task_panel.description_edit.setPlainText(goal)
+    _run_until_finished(window, app, window._start_task)
+
+    run_call = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert "--single-agent" in run_call
+    assert "--plan-only" not in run_call
+    assert window.history[0].mode == "single"
+    assert window.history[0].status == TaskPhase.PASSED.value
+    assert "未经 Brain 验收" in window.history[0].result_summary
+    on_disk = json.loads((data_dir / "history.json").read_text(encoding="utf-8"))
+    assert on_disk[0]["mode"] == "single"
     window.close()

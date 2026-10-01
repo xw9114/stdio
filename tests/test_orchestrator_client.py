@@ -13,6 +13,7 @@ from PySide6.QtCore import QCoreApplication, QTimer
 from app.core.orchestrator_client import OrchestratorClient
 from app.core.task_state import TaskPhase
 from app.models.task import AgentTask, utc_now_iso
+from qt_helpers import run_event_loop
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="uses a Windows .cmd shim to fake dual-agent.cmd")
 
@@ -101,8 +102,7 @@ def test_full_task_lifecycle_drives_phases_and_reports_passed(tmp_path: Path) ->
 
     client.run_task(task)
 
-    QTimer.singleShot(15000, app.quit)  # safety timeout
-    app.exec()
+    run_event_loop(app, 15000)
 
     assert not errors, f"unexpected client errors: {errors}"
     assert finished, "task_finished was never emitted"
@@ -167,8 +167,7 @@ def test_cancel_task_reports_cancelled_not_the_orchestrators_own_exit_status(tmp
     poll.timeout.connect(lambda: cancel_once_started() and poll.stop())
     poll.start(50)
 
-    QTimer.singleShot(15000, app.quit)  # safety timeout
-    app.exec()
+    run_event_loop(app, 15000)
 
     assert finished, "task_finished was never emitted after cancellation"
     _exit_code, _payload, cancelled = finished[0]

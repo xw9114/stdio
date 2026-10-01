@@ -17,6 +17,7 @@ class AppSettings:
     check_environment_on_start: bool = True
     auto_detect_roles: bool = True
     confirm_plan: bool = True
+    single_agent: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -38,6 +39,7 @@ class AppSettings:
             ),
             auto_detect_roles=_boolean(value.get("auto_detect_roles"), defaults.auto_detect_roles),
             confirm_plan=_boolean(value.get("confirm_plan"), defaults.confirm_plan),
+            single_agent=_boolean(value.get("single_agent"), defaults.single_agent),
         )
 
 

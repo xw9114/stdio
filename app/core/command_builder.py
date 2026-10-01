@@ -28,7 +28,10 @@ class CommandBuilder:
         arguments = ["run", *self._agent_arguments(task)]
         if quiet:
             arguments.append("--quiet")
-        if plan_only:
+        if task.mode == "single":
+            # The orchestrator rejects --plan-only here: there is no plan.
+            arguments.append("--single-agent")
+        elif plan_only:
             arguments.append("--plan-only")
         arguments.append(task.description)
         return self._spec(arguments, task.project_path)

@@ -400,7 +400,8 @@ class MainWindow(QMainWindow):
         self.settings.default_executor = self.task_panel.executor()
         self.settings.default_max_retries = self.task_panel.max_retries()
         self.settings.auto_detect_roles = self.task_panel.auto_detect_checkbox.isChecked()
-        self.settings.confirm_plan = self.task_panel.confirm_plan()
+        self.settings.confirm_plan = self.task_panel.confirm_plan_checkbox.isChecked()
+        self.settings.single_agent = self.task_panel.mode() == "single"
         self.settings.auto_scroll_logs = self.log_panel.auto_scroll.isChecked()
         self._settings_service.save(self.settings)
 
@@ -412,6 +413,7 @@ class MainWindow(QMainWindow):
             max_retries=self.task_panel.max_retries(),
             status=TaskPhase.RUNNING.value,
             started_at=utc_now_iso(),
+            mode=self.task_panel.mode(),
         )
         plan_only = self.task_panel.confirm_plan()
         meta = _task_meta(task) + (" · 先确认计划" if plan_only else "")
@@ -473,6 +475,7 @@ class MainWindow(QMainWindow):
             max_retries=source.max_retries,
             status=TaskPhase.RUNNING.value,
             started_at=utc_now_iso(),
+            mode=source.mode,
         )
 
     def _busy(self) -> bool:
@@ -779,8 +782,10 @@ class MainWindow(QMainWindow):
 
 
 def _task_meta(task: AgentTask) -> str:
-    brain = AGENT_LABELS.get(task.brain, task.brain)
     executor = AGENT_LABELS.get(task.executor, task.executor)
+    if task.mode == "single":
+        return f"单 agent · {executor} · 不规划、不验收"
+    brain = AGENT_LABELS.get(task.brain, task.brain)
     return f"{brain} → {executor} · 最多返工 {task.max_retries} 次"
 
 
@@ -798,6 +803,8 @@ def _final_summary(
     exit_code: int,
     orchestrator_error: str | None = None,
 ) -> str:
+    if phase == TaskPhase.PASSED and payload and payload.get("mode") == "single":
+        return "Executor 已完成任务（单 agent 模式，未经 Brain 验收）。"
     if phase == TaskPhase.PASSED:
         return "任务完成，所有步骤已通过 Brain 验收。"
     if phase == TaskPhase.AWAITING_APPROVAL:

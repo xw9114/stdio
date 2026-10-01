@@ -55,7 +55,8 @@ class _ThreadItem(QWidget):
             color = PENDING_COLOR
         dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         status_row.addWidget(dot)
-        time_label = QLabel(_relative_time(task.started_at))
+        time_text = _relative_time(task.started_at)
+        time_label = QLabel(f"{time_text} · 单 agent" if task.mode == "single" else time_text)
         time_label.setObjectName("threadItemTime")
         status_row.addWidget(time_label)
         status_row.addStretch()

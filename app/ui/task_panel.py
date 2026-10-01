@@ -103,11 +103,25 @@ class TaskPanel(QFrame):
         self._second_row.setContentsMargins(0, 0, 0, 0)
         self._second_row.setSpacing(6)
         self._compact = False
+        self._running = False
+
+        self.mode_combo = _chip_combo()
+        self.mode_combo.addItem("双 agent", "dual")
+        self.mode_combo.addItem("单 agent", "single")
+        self.mode_combo.setItemData(
+            0, "Brain 规划并验收，Executor 修改代码", Qt.ItemDataRole.ToolTipRole
+        )
+        self.mode_combo.setItemData(
+            1, "只用 Executor 直接完成任务，不规划、不验收；用来对比两种方式的效果", Qt.ItemDataRole.ToolTipRole
+        )
+        self.mode_combo.currentIndexChanged.connect(lambda _index: self._apply_mode())
+        chips.addWidget(self.mode_combo)
 
         brain_label = QLabel("Brain")
         brain_label.setObjectName("chipLabel")
+        self._brain_label = brain_label
         chips.addWidget(brain_label)
-        self.brain_combo = _chip_combo()
+        self.brain_combo = _chip_combo("Brain")
         for option in BRAIN_OPTIONS:
             self.brain_combo.addItem(option.label, option.key)
         self.brain_combo.activated.connect(self._mark_brain_manual)
@@ -115,8 +129,9 @@ class TaskPanel(QFrame):
 
         executor_label = QLabel("Executor")
         executor_label.setObjectName("chipLabel")
+        self._executor_label = executor_label
         chips.addWidget(executor_label)
-        self.executor_combo = _chip_combo()
+        self.executor_combo = _chip_combo("Executor")
         for option in EXECUTOR_OPTIONS:
             self.executor_combo.addItem(option.label, option.key)
         self.executor_combo.activated.connect(self._mark_executor_manual)
@@ -219,7 +234,7 @@ class TaskPanel(QFrame):
             for index in range(self._chips_row.count())
         ]
         top_width = sum(
-            widget.sizeHint().width()
+            _comfortable_width(widget)
             for widget in top_items
             if widget is not None and widget is not self._run_options
         )
@@ -232,6 +247,10 @@ class TaskPanel(QFrame):
         if compact == self._compact:
             return
         self._compact = compact
+        # Three pickers plus their captions do not fit one narrow row; the
+        # captions give way and the pickers' tooltips name the role instead.
+        self._brain_label.setVisible(not compact)
+        self._executor_label.setVisible(not compact)
         if compact:
             self._chips_row.removeWidget(self._run_options)
             # Keep the agent pickers packed to the left instead of spread
@@ -300,6 +319,8 @@ class TaskPanel(QFrame):
         self.retry_spin.setValue(settings.default_max_retries)
         self.auto_detect_checkbox.setChecked(settings.auto_detect_roles)
         self.confirm_plan_checkbox.setChecked(settings.confirm_plan)
+        self._set_combo_value(self.mode_combo, "single" if settings.single_agent else "dual")
+        self._apply_mode()
         self._brain_manual = False
         self._executor_manual = False
         self._retry_manual = False
@@ -334,13 +355,26 @@ class TaskPanel(QFrame):
         self.browse_button.setEnabled(not running)
         self.init_button.setEnabled(not running)
         self.project_edit.setEnabled(not running)
-        self.brain_combo.setEnabled(not running)
         self.executor_combo.setEnabled(not running)
-        self.retry_spin.setEnabled(not running)
-        self.confirm_plan_checkbox.setEnabled(not running)
+        self.mode_combo.setEnabled(not running)
+        self._running = running
+        self._apply_mode()
+
+    def mode(self) -> str:
+        return str(self.mode_combo.currentData())
 
     def confirm_plan(self) -> bool:
-        return self.confirm_plan_checkbox.isChecked()
+        # A single-agent run has no plan to confirm.
+        return self.mode() == "dual" and self.confirm_plan_checkbox.isChecked()
+
+    def _apply_mode(self) -> None:
+        # Brain, retries and plan confirmation only exist in the two-agent
+        # workflow; disabling them shows what a single-agent run leaves out.
+        dual = self.mode() == "dual"
+        editable = not self._running
+        self._brain_label.setEnabled(dual)
+        for widget in (self.brain_combo, self.retry_spin, self.confirm_plan_checkbox):
+            widget.setEnabled(dual and editable)
 
     def _apply_inference(self) -> None:
         if not self.auto_detect_checkbox.isChecked():
@@ -377,14 +411,25 @@ class _ChipCombo(QComboBox):
     stays available as a tooltip when the text is clipped."""
 
     _MINIMUM_WIDTH = 96
+    COMFORTABLE_WIDTH = 140
 
     def minimumSizeHint(self) -> QSize:
         hint = super().minimumSizeHint()
         return QSize(min(hint.width(), self._MINIMUM_WIDTH), hint.height())
 
 
-def _chip_combo() -> QComboBox:
+def _comfortable_width(widget: QWidget) -> int:
+    # A combo's size hint is its longest item ("OpenAI Responses API"), so
+    # judging the row by it kept the options on two rows at any window
+    # width. Budget a typical label instead; a longer one is clipped.
+    hint = widget.sizeHint().width()
+    return min(hint, _ChipCombo.COMFORTABLE_WIDTH) if isinstance(widget, _ChipCombo) else hint
+
+
+def _chip_combo(role: str = "") -> QComboBox:
     combo = _ChipCombo()
     combo.setObjectName("chip")
-    combo.currentTextChanged.connect(combo.setToolTip)
+    combo.currentTextChanged.connect(
+        lambda text: combo.setToolTip(f"{role}：{text}" if role else text)
+    )
     return combo

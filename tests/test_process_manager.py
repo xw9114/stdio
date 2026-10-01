@@ -11,11 +11,12 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QProcess, QTimer
+from PySide6.QtCore import QCoreApplication, QProcess
 
 from app.core.command_builder import CommandBuilder, CommandSpec
 from app.core.process_manager import configure_process
 from app.models.task import AgentTask
+from qt_helpers import run_event_loop
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows-specific process launch behaviour")
 
@@ -139,8 +140,7 @@ def test_multi_word_argument_survives_as_a_single_argv_element(tmp_path: Path) -
     process.finished.connect(lambda code, _status: (finished.append(code), app.quit()))
     process.start()
 
-    QTimer.singleShot(10000, app.quit)  # safety timeout
-    app.exec()
+    run_event_loop(app, 10000)
 
     assert finished == [0], "dump-args.cmd did not run to completion"
     recorded = record_path.read_text(encoding="utf-8").splitlines()
@@ -187,8 +187,7 @@ def test_goal_with_cmd_metacharacters_reaches_node_forwarder_intact(tmp_path: Pa
     finished: list[int] = []
     process.finished.connect(lambda code, _status: (finished.append(code), app.quit()))
     process.start()
-    QTimer.singleShot(10000, app.quit)  # safety timeout
-    app.exec()
+    run_event_loop(app, 10000)
 
     assert finished == [0]
     recorded = json.loads(record_path.read_text(encoding="utf-8"))

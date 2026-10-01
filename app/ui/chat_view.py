@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -89,16 +90,33 @@ class _StepCard(QFrame):
         self.setObjectName("stepCard")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.state = "pending"
+        # A step reads as one quiet line once finished ("Brain 已验收修改 · 18 秒");
+        # only the active step stands out. Finished titles switch from the
+        # progressive "正在…" to "已…" so the history does not claim it is
+        # still running.
+        # The role already has its own coloured label; drop it from the title
+        # so a row reads "Brain › 已验收修改", not "Brain › Brain 已验收修改".
+        role_name = (
+            "Brain"
+            if phase in {TaskPhase.PLANNING, TaskPhase.REVIEWING}
+            else "Executor" if phase in {TaskPhase.EXECUTING, TaskPhase.RETRYING} else ""
+        )
+        if role_name and title.startswith(f"{role_name} "):
+            title = title[len(role_name) + 1 :]
+        self._title = title
+        self._attempt = attempt
+        self._started = time.monotonic()
+        self._elapsed: float | None = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 1, 10, 1)
+        layout.setSpacing(4)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(8)
 
         self.dot = QFrame()
-        self.dot.setFixedSize(10, 10)
+        self.dot.setFixedSize(8, 8)
         header_layout.addWidget(self.dot)
 
         if phase in {TaskPhase.PLANNING, TaskPhase.REVIEWING}:
@@ -114,6 +132,7 @@ class _StepCard(QFrame):
         elif phase == TaskPhase.VERIFYING:
             role = QLabel("验证")
             role.setObjectName("roleLabel")
+            role.setProperty("role", "verify")
             header_layout.addWidget(role)
 
         self.header = QToolButton()
@@ -125,10 +144,9 @@ class _StepCard(QFrame):
         self.header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header_layout.addWidget(self.header, 1)
 
-        if attempt is not None:
-            attempt_label = QLabel(f"第 {attempt} 次")
-            attempt_label.setObjectName("muted")
-            header_layout.addWidget(attempt_label)
+        self.meta = QLabel()
+        self.meta.setObjectName("stepMeta")
+        header_layout.addWidget(self.meta)
         layout.addLayout(header_layout)
 
         self.log = QPlainTextEdit()
@@ -157,9 +175,20 @@ class _StepCard(QFrame):
             "done": DONE_COLOR,
             "failed": DANGER,
         }
+        if self.state == "active" and state in {"done", "failed"}:
+            self._elapsed = time.monotonic() - self._started
         self.state = state
         color = colors.get(state, PENDING_COLOR)
-        self.dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
+        self.dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
+        self.header.setText(self._title.replace("正在", "已", 1) if state == "done" else self._title)
+        parts = [f"第 {self._attempt} 次"] if self._attempt and self._attempt > 1 else []
+        if self._elapsed is not None and self._elapsed >= 1:
+            parts.append(_short_duration(self._elapsed))
+        self.meta.setText(" · ".join(parts))
+        for widget in (self, self.header):
+            widget.setProperty("state", state)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
     def line_count(self) -> int:
         return self.log.document().blockCount() if self.log.toPlainText() else 0
@@ -189,10 +218,29 @@ class _ResultCard(QFrame):
             TaskPhase.CANCELLED: ("任务已取消", "muted"),
         }
         title, status = titles.get(task.status, ("任务结束", "muted"))
+        # Status on the left and the key numbers on the right of one line,
+        # the summary under it: the outcome is readable at a glance.
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(12)
         status_label = QLabel(title)
         status_label.setObjectName("resultStatus")
         status_label.setProperty("status", status)
-        layout.addWidget(status_label)
+        top.addWidget(status_label)
+        top.addStretch()
+        retries, _, files = _result_counts(payload)
+        numbers = [_duration(task.started_at, task.finished_at)]
+        if retries:
+            numbers.append(f"返工 {retries} 次")
+        usage = usage_summary(payload)
+        if usage:
+            numbers.append(usage)
+        metrics = QLabel(" · ".join(numbers))
+        metrics.setObjectName("stepMeta")
+        if files is not None:
+            metrics.setToolTip(f"修改文件 {files} 个")
+        top.addWidget(metrics)
+        layout.addLayout(top)
 
         summary = QLabel(task.result_summary or "暂无结果概要")
         summary.setTextFormat(Qt.TextFormat.PlainText)
@@ -200,28 +248,17 @@ class _ResultCard(QFrame):
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        retries, _, files = _result_counts(payload)
-        duration = _duration(task.started_at, task.finished_at)
-        retry_text = str(retries) if retries is not None else "未知"
-        file_text = str(files) if files is not None else "未知"
-        usage = usage_summary(payload)
-        metrics = QLabel(
-            f"耗时 {duration} · 返工 {retry_text} · 修改文件 {file_text}" + (f" · {usage}" if usage else "")
-        )
-        metrics.setObjectName("muted")
-        metrics.setWordWrap(True)
-        layout.addWidget(metrics)
-
         self.isolation_label: QLabel | None = None
         self.apply_button: QPushButton | None = None
         self.discard_button: QPushButton | None = None
         if isolation:
-            self.isolation_label = _wrapped_label(
-                f"改动在独立分支 {isolation['branch']} 上，尚未应用到你的工作区。"
-                "确认没问题后再应用；不想要就丢弃。"
-            )
+            self.isolation_label = QLabel(f"未应用 · 改动在分支 {isolation['branch']} 上")
             self.isolation_label.setObjectName("isolationNote")
-            layout.addWidget(self.isolation_label)
+            self.isolation_label.setToolTip(
+                "这次运行在独立的 git 分支上完成，你的工作区还没有变化。"
+                "确认没问题后点「应用到工作区」；不想要就「丢弃改动」。"
+            )
+            layout.addWidget(self.isolation_label, 0, Qt.AlignmentFlag.AlignLeft)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -379,6 +416,14 @@ class _PlanCard(QFrame):
         self.discarded.emit()
 
 
+def _short_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} 秒"
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes} 分 {rest} 秒" if rest else f"{minutes} 分"
+
+
 def _wrapped_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setTextFormat(Qt.TextFormat.PlainText)
@@ -411,6 +456,7 @@ class ChatView(QWidget):
         super().__init__(parent)
         self.setObjectName("chatArea")
         self._messages: list[QWidget] = []
+        self._gaps: list[QWidget] = []
         self._active_card: _StepCard | None = None
         self._active_key: tuple[TaskPhase, int | None] | None = None
 
@@ -430,11 +476,11 @@ class ChatView(QWidget):
         centered_layout.addStretch()
 
         column = QWidget()
-        column.setMaximumWidth(820)
+        column.setMaximumWidth(760)
         column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._column_layout = QVBoxLayout(column)
         self._column_layout.setContentsMargins(0, 0, 0, 0)
-        self._column_layout.setSpacing(14)
+        self._column_layout.setSpacing(4)
         centered_layout.addWidget(column, 1)
         centered_layout.addStretch()
 
@@ -457,10 +503,11 @@ class ChatView(QWidget):
         self._column_layout.addStretch()
 
     def clear(self) -> None:
-        for message in self._messages:
-            self._column_layout.removeWidget(message)
-            message.deleteLater()
+        for widget in (*self._messages, *self._gaps):
+            self._column_layout.removeWidget(widget)
+            widget.deleteLater()
         self._messages.clear()
+        self._gaps.clear()
         self._active_card = None
         self._active_key = None
         self._empty_state.show()
@@ -551,7 +598,17 @@ class ChatView(QWidget):
         scrollbar = self.scroll_area.verticalScrollBar()
         near_bottom = scrollbar.maximum() - scrollbar.value() < 40
         self._empty_state.hide()
-        self._column_layout.insertWidget(len(self._messages), message)
+        # Step rows sit tight together; bubbles and cards get breathing room
+        # where the conversation changes from one kind of message to another.
+        previous = self._messages[-1] if self._messages else None
+        if previous is not None and not (isinstance(previous, _StepCard) and isinstance(message, _StepCard)):
+            spacer = QWidget()
+            spacer.setFixedHeight(10)
+            spacer.setObjectName("messageGap")
+            self._column_layout.insertWidget(self._column_layout.count() - 2, spacer)
+            self._gaps.append(spacer)
+        # The column ends with the empty-state placeholder and a stretch.
+        self._column_layout.insertWidget(self._column_layout.count() - 2, message)
         self._messages.append(message)
         if near_bottom:
             QTimer.singleShot(0, self, self._scroll_to_bottom)

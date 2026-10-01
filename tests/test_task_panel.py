@@ -111,43 +111,43 @@ def test_description_grows_then_scrolls_after_eight_lines(task_panel: TaskPanel)
     assert task_panel.description_edit.verticalScrollBar().maximum() > 0
 
 
-def test_narrow_composer_wraps_options_and_keeps_send_button_visible(
-    task_panel: TaskPanel,
-) -> None:
+def test_composer_row_fits_narrow_and_wide_columns(task_panel: TaskPanel) -> None:
     """Regression test: at the 900px minimum window width with the inspector
-    open, the chat column is ~420px while one row of option chips needed
-    ~600px, so the send button was pushed out of view behind a horizontal
-    scrollbar. The run options must drop to a second row instead."""
+    open the chat column is ~420px. A row of every option chip needed ~600px
+    and pushed the send button out of view; the options now live in a
+    popover behind one summary button, so the row fits either way."""
 
-    def send_fully_visible() -> bool:
-        button = task_panel.start_button
-        return button.isVisible() and button.visibleRegion().boundingRect() == button.rect()
+    def fully_visible(widget) -> bool:
+        return widget.isVisible() and widget.visibleRegion().boundingRect() == widget.rect()
 
-    task_panel.resize(370, 330)
-    QApplication.processEvents()
-    assert task_panel._compact
-    assert send_fully_visible()
-    assert not task_panel.scroll_area.horizontalScrollBar().isVisible()
+    for width in (370, 1000):
+        task_panel.resize(width, 330)
+        QApplication.processEvents()
+        assert fully_visible(task_panel.start_button), width
+        assert fully_visible(task_panel.mode_combo), width
+        assert task_panel.options_button.isVisible(), width
+        assert not task_panel.scroll_area.horizontalScrollBar().isVisible(), width
 
+
+def test_options_live_in_a_popover_summarised_on_the_button(task_panel: TaskPanel) -> None:
     task_panel.resize(1000, 330)
     QApplication.processEvents()
-    assert not task_panel._compact
-    assert send_fully_visible()
+    assert not task_panel.brain_combo.isVisible(), "options are not in the row"
 
+    task_panel.retry_spin.setValue(5)
+    task_panel.confirm_plan_checkbox.setChecked(True)
+    summary = task_panel.options_button.toolTip()
+    assert summary == f"{task_panel.brain_combo.currentText()} → {task_panel.executor_combo.currentText()} · 最多返工 5 次 · 先确认计划"
+    assert task_panel.options_button.text().endswith("▾")
 
-def test_wide_composer_starts_on_one_row() -> None:
-    """Regression test: the row layout was decided in the panel's own
-    resizeEvent, which runs before the scroll area resizes its viewport, so
-    a freshly shown wide composer still measured its construction-time
-    width and started (and stayed) split into two rows."""
-    panel = TaskPanel()
-    panel.resize(1000, 330)
-    panel.show()
+    task_panel.options_button.click()
     QApplication.processEvents()
-    try:
-        assert not panel._compact
-    finally:
-        panel.close()
+    assert task_panel.options_popup.isVisible()
+    assert task_panel.brain_combo.isVisible()
+    task_panel.options_popup.hide()
+
+    task_panel.mode_combo.setCurrentIndex(task_panel.mode_combo.findData("single"))
+    assert task_panel.options_button.toolTip() == f"{task_panel.executor_combo.currentText()} 单独执行"
 
 
 def test_single_agent_mode_disables_what_it_does_not_use(task_panel: TaskPanel) -> None:

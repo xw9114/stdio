@@ -60,7 +60,10 @@ def test_phase_transitions_create_distinct_cards_without_polling_duplicates(
     assert len(cards) == 3
     assert chat_view.message_count() == 3
     assert [card.state for card in cards] == ["done", "done", "active"]
-    assert cards[1].header.text() == executing.message
+    # Finished steps no longer claim to be running; the active one does. The
+    # role has its own label, so it is not repeated in the title.
+    assert cards[1].header.text() == "已修改并验证"
+    assert cards[2].header.text() == "正在验收修改"
     assert cards[1].line_count() == 0
 
     chat_view.set_phase(StateSnapshot(TaskPhase.PASSED, "所有任务已通过验收"))
@@ -121,10 +124,9 @@ def test_result_adds_card_with_shared_metrics_and_diff_signal(chat_view: ChatVie
     assert chat_view.message_count() == before + 1
     assert chat_view.findChildren(_StepCard)[0].state == "done"
     assert any(label.text() == "✓ 任务完成" for label in chat_view.findChildren(QLabel))
-    assert any(
-        label.text() == "耗时 1 分 5 秒 · 返工 1 · 修改文件 2"
-        for label in chat_view.findChildren(QLabel)
-    )
+    metrics = [label for label in chat_view.findChildren(QLabel) if label.text() == "1 分 5 秒 · 返工 1 次"]
+    assert metrics, [label.text() for label in chat_view.findChildren(QLabel)]
+    assert metrics[0].toolTip() == "修改文件 2 个"
     result = chat_view._messages[-1]
     result.diff_button.click()
     assert requested == [True]

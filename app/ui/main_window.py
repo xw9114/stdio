@@ -163,7 +163,8 @@ class MainWindow(QMainWindow):
         composer_layout.setSpacing(0)
         composer_layout.addStretch(0)
         self.task_panel = TaskPanel()
-        self.task_panel.setMaximumWidth(860)
+        # Matches the chat column (760px plus the panel's own margins).
+        self.task_panel.setMaximumWidth(776)
         self.task_panel.setMinimumHeight(280)
         composer_layout.addWidget(self.task_panel, 1)
         composer_layout.addStretch(0)

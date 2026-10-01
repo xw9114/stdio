@@ -163,9 +163,14 @@ QFrame#userBubble {{ background: {USER_BUBBLE}; border-radius: 16px; padding: 10
 QLabel#roleLabel {{ font-weight: 600; font-size: 12px; }}
 QLabel#roleLabel[role="brain"] {{ color: {BRAIN_COLOR}; }}
 QLabel#roleLabel[role="executor"] {{ color: {EXECUTOR_COLOR}; }}
-QFrame#stepCard {{ background: transparent; border: 1px solid {BORDER}; border-radius: 10px; }}
-QFrame#stepCard:hover {{ border-color: {BORDER_STRONG}; }}
-QToolButton#stepHeader {{ background: transparent; border: 0; text-align: left; color: {TEXT}; }}
+QLabel#roleLabel[role="verify"] {{ color: {TEXT_MUTED}; font-weight: 500; }}
+QFrame#stepCard {{ background: transparent; border: 0; border-radius: 8px; }}
+QFrame#stepCard:hover {{ background: {SURFACE}; }}
+QFrame#stepCard[state="active"] {{ background: {SURFACE}; }}
+QToolButton#stepHeader {{ background: transparent; border: 0; text-align: left; color: {TEXT}; padding: 2px 0; }}
+QToolButton#stepHeader[state="done"] {{ color: {TEXT_MUTED}; }}
+QToolButton#stepHeader[state="failed"] {{ color: {DANGER}; }}
+QLabel#stepMeta {{ color: {TEXT_FAINT}; font-size: 12px; }}
 QPlainTextEdit#stepLog {{
     background: {SIDEBAR_BG};
     border: 0;
@@ -174,7 +179,8 @@ QPlainTextEdit#stepLog {{
     font-family: Consolas, "Microsoft YaHei UI";
     font-size: 12px;
 }}
-QFrame#resultCard {{ background: {SURFACE}; border: 0; border-radius: 12px; }}
+QFrame#resultCard {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
+QFrame#resultCard QLabel {{ background: transparent; }}
 QFrame#resultCard QPushButton#toolButton {{ background: {SURFACE_RAISED}; color: {TEXT}; }}
 QFrame#resultCard QPushButton#toolButton:hover {{ background: {HOVER}; }}
 QLabel#resultStatus {{ font-weight: 600; }}
@@ -185,7 +191,27 @@ QLabel#emptyStateTitle {{ font-size: 24px; font-weight: 600; }}
 QFrame#planCard {{ background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 12px; }}
 QFrame#planCard QLabel, QFrame#planCard QCheckBox {{ background: transparent; }}
 QLabel#planTitle {{ font-weight: 600; color: {ACTIVE_COLOR}; }}
-QLabel#isolationNote {{ color: {ACTIVE_COLOR}; }}
+QLabel#isolationNote {{
+    color: {ACTIVE_COLOR};
+    background: rgba(230, 180, 80, 0.12);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+}}
+QPushButton#optionsButton {{
+    background: transparent;
+    color: {TEXT_MUTED};
+    border: 0;
+    border-radius: 13px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+}}
+QPushButton#optionsButton:hover {{ background: {SURFACE_RAISED}; color: {TEXT}; }}
+QPushButton#optionsButton:disabled {{ color: {TEXT_FAINT}; background: transparent; }}
+QFrame#optionsPopup {{ background: {SURFACE_RAISED}; border: 1px solid {BORDER_STRONG}; border-radius: 10px; }}
+QFrame#optionsPopup QLabel, QFrame#optionsPopup QCheckBox {{ background: transparent; }}
 QLabel#planRoute {{ color: {TEXT}; font-weight: 600; }}
 QLabel#planSection {{ color: {TEXT_FAINT}; font-size: 12px; font-weight: 600; }}
 QCheckBox#planTask {{ color: {TEXT}; }}

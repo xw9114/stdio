@@ -3,13 +3,13 @@ from __future__ import annotations
 from math import ceil
 from typing import cast
 
-from PySide6.QtCore import QEvent, QObject, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QKeyEvent, QResizeEvent
+from PySide6.QtCore import QEvent, QObject, QPoint, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
-    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStyle,
     QVBoxLayout,
@@ -89,20 +90,14 @@ class TaskPanel(QFrame):
         )
         composer_layout.addWidget(self.description_edit)
 
-        # Two rows of option chips. The run options (retries, auto-detect,
-        # send/stop) live in one container that sits at the end of the top
-        # row when the column is wide and drops to a second row when it is
-        # not - with the inspector open at the 900px minimum window width,
-        # a single row needed ~600px of a 420px column and pushed the send
-        # button out of view.
+        # One quiet row under the prompt: the run mode, a summary button that
+        # opens the agent options in a popover, and send/stop. With Brain,
+        # Executor, retries and two checkboxes out of the row the composer
+        # reads as a prompt box rather than a form, and the row fits the
+        # ~420px chat column of the minimum window with the inspector open.
         chips = QHBoxLayout()
         chips.setContentsMargins(0, 0, 0, 0)
         chips.setSpacing(6)
-        self._chips_row = chips
-        self._second_row = QHBoxLayout()
-        self._second_row.setContentsMargins(0, 0, 0, 0)
-        self._second_row.setSpacing(6)
-        self._compact = False
         self._running = False
 
         self.mode_combo = _chip_combo()
@@ -112,55 +107,17 @@ class TaskPanel(QFrame):
         self.mode_combo.currentIndexChanged.connect(lambda _index: self._apply_mode())
         chips.addWidget(self.mode_combo)
 
-        brain_label = QLabel("Brain")
-        brain_label.setObjectName("chipLabel")
-        self._brain_label = brain_label
-        chips.addWidget(brain_label)
-        self.brain_combo = _chip_combo("Brain")
-        for option in BRAIN_OPTIONS:
-            self.brain_combo.addItem(option.label, option.key)
-        self.brain_combo.activated.connect(self._mark_brain_manual)
-        chips.addWidget(self.brain_combo)
-
-        executor_label = QLabel("Executor")
-        executor_label.setObjectName("chipLabel")
-        self._executor_label = executor_label
-        chips.addWidget(executor_label)
-        self.executor_combo = _chip_combo("Executor")
-        for option in EXECUTOR_OPTIONS:
-            self.executor_combo.addItem(option.label, option.key)
-        self.executor_combo.activated.connect(self._mark_executor_manual)
-        chips.addWidget(self.executor_combo)
-
-        self._run_options = QWidget()
-        self._run_options.setObjectName("composerContent")
-        run_options = QHBoxLayout(self._run_options)
-        run_options.setContentsMargins(0, 0, 0, 0)
-        run_options.setSpacing(6)
-
-        self.retry_spin = QSpinBox()
-        self.retry_spin.setObjectName("chip")
-        self.retry_spin.setRange(0, 20)
-        self.retry_spin.setSuffix(" 次返工")
-        self.retry_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.retry_spin.setMinimumWidth(82)
-        self.retry_spin.setMaximumWidth(96)
-        self.retry_spin.editingFinished.connect(self._mark_retry_manual)
-        run_options.addWidget(self.retry_spin)
-
-        self.auto_detect_checkbox = QCheckBox("自动识别")
-        self.auto_detect_checkbox.setToolTip("根据任务描述自动识别角色和返工次数")
-        self.auto_detect_checkbox.toggled.connect(
-            lambda checked: self._apply_inference() if checked else None
-        )
-        run_options.addWidget(self.auto_detect_checkbox)
-
-        self.confirm_plan_checkbox = QCheckBox("先确认计划")
-        self.confirm_plan_checkbox.setToolTip(
-            "Brain 规划完先停下，确认、删减任务或回答问题后再开始修改代码"
-        )
-        run_options.addWidget(self.confirm_plan_checkbox)
-        run_options.addStretch()
+        # A QPushButton, not a QToolButton: its label can be left-aligned in
+        # the stylesheet, so the summary sits next to the mode picker. It
+        # takes the free width and elides its text when the column narrows.
+        self.options_button = QPushButton()
+        self.options_button.setObjectName("optionsButton")
+        self.options_button.setToolTip("Brain、Executor、返工次数和其他选项")
+        self.options_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.options_button.setMinimumWidth(60)
+        self.options_button.clicked.connect(self._show_options)
+        self.options_button.installEventFilter(self)
+        chips.addWidget(self.options_button, 1)
 
         self.start_button = QPushButton()
         self.start_button.setObjectName("sendButton")
@@ -168,7 +125,7 @@ class TaskPanel(QFrame):
         self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp))
         self.start_button.setToolTip("发送 (Enter)")
         self.start_button.clicked.connect(self.start_requested)
-        run_options.addWidget(self.start_button)
+        chips.addWidget(self.start_button)
 
         self.stop_button = QPushButton()
         self.stop_button.setObjectName("stopButton")
@@ -177,11 +134,66 @@ class TaskPanel(QFrame):
         self.stop_button.setToolTip("停止任务")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_requested)
-        run_options.addWidget(self.stop_button)
+        chips.addWidget(self.stop_button)
         self.stop_button.hide()
-        chips.addWidget(self._run_options, 1)
         composer_layout.addLayout(chips)
-        composer_layout.addLayout(self._second_row)
+
+        # The options popover: a frameless popup that closes on outside click.
+        self.options_popup = QFrame(self, Qt.WindowType.Popup)
+        self.options_popup.setObjectName("optionsPopup")
+        options = QGridLayout(self.options_popup)
+        options.setContentsMargins(14, 12, 14, 12)
+        options.setHorizontalSpacing(10)
+        options.setVerticalSpacing(8)
+
+        brain_label = QLabel("Brain")
+        brain_label.setObjectName("chipLabel")
+        self._brain_label = brain_label
+        self.brain_combo = _chip_combo("Brain")
+        for option in BRAIN_OPTIONS:
+            self.brain_combo.addItem(option.label, option.key)
+        self.brain_combo.activated.connect(self._mark_brain_manual)
+        options.addWidget(brain_label, 0, 0)
+        options.addWidget(self.brain_combo, 0, 1)
+
+        executor_label = QLabel("Executor")
+        executor_label.setObjectName("chipLabel")
+        self.executor_combo = _chip_combo("Executor")
+        for option in EXECUTOR_OPTIONS:
+            self.executor_combo.addItem(option.label, option.key)
+        self.executor_combo.activated.connect(self._mark_executor_manual)
+        options.addWidget(executor_label, 1, 0)
+        options.addWidget(self.executor_combo, 1, 1)
+
+        retry_label = QLabel("最多返工")
+        retry_label.setObjectName("chipLabel")
+        self.retry_spin = QSpinBox()
+        self.retry_spin.setObjectName("chip")
+        self.retry_spin.setRange(0, 20)
+        self.retry_spin.setSuffix(" 次")
+        self.retry_spin.editingFinished.connect(self._mark_retry_manual)
+        options.addWidget(retry_label, 2, 0)
+        options.addWidget(self.retry_spin, 2, 1)
+
+        self.auto_detect_checkbox = QCheckBox("根据描述自动识别角色和返工次数")
+        self.auto_detect_checkbox.toggled.connect(
+            lambda checked: self._apply_inference() if checked else None
+        )
+        options.addWidget(self.auto_detect_checkbox, 3, 0, 1, 2)
+
+        self.confirm_plan_checkbox = QCheckBox("先确认计划再修改代码")
+        self.confirm_plan_checkbox.setToolTip(
+            "Brain 规划完先停下，确认、删减任务或回答问题后再开始修改代码"
+        )
+        options.addWidget(self.confirm_plan_checkbox, 4, 0, 1, 2)
+
+        for signal in (
+            self.brain_combo.currentIndexChanged,
+            self.executor_combo.currentIndexChanged,
+            self.retry_spin.valueChanged,
+            self.confirm_plan_checkbox.toggled,
+        ):
+            signal.connect(lambda *_: self._update_options_summary())
 
         workspace = QHBoxLayout()
         workspace.setContentsMargins(0, 0, 0, 0)
@@ -211,60 +223,38 @@ class TaskPanel(QFrame):
 
         self._update_description_height()
         QTimer.singleShot(0, self._update_description_height)
-        # Installed last: the viewport already emits events while the
-        # widgets the filter refers to are still being built.
-        self.scroll_area.viewport().installEventFilter(self)
+        self._update_options_summary()
 
-    def _update_chip_rows(self) -> None:
-        composer_margins = self.composer.layout().contentsMargins()
-        available = (
-            self.scroll_area.viewport().width()
-            - 16  # content layout margins
-            - composer_margins.left()
-            - composer_margins.right()
-            - 2  # composer border
+    def _options_summary(self) -> str:
+        executor = self.executor_combo.currentText()
+        if self.mode() == "single":
+            return f"{executor} 单独执行"
+        summary = f"{self.brain_combo.currentText()} → {executor} · 最多返工 {self.retry_spin.value()} 次"
+        return summary + (" · 先确认计划" if self.confirm_plan_checkbox.isChecked() else "")
+
+    def _update_options_summary(self) -> None:
+        # Elided to the button's width; the full text stays in the tooltip.
+        text = self._options_summary()
+        width = max(20, self.options_button.width() - 28)
+        self.options_button.setText(
+            self.options_button.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, width) + "  ▾"
         )
-        top_items = [
-            self._chips_row.itemAt(index).widget()
-            for index in range(self._chips_row.count())
-        ]
-        top_width = sum(
-            _comfortable_width(widget)
-            for widget in top_items
-            if widget is not None and widget is not self._run_options
-        )
-        needed = (
-            top_width
-            + self._run_options.sizeHint().width()
-            + self._chips_row.spacing() * len(top_items)
-        )
-        compact = available < needed
-        if compact == self._compact:
-            return
-        self._compact = compact
-        # Three pickers plus their captions do not fit one narrow row; the
-        # captions give way and the pickers' tooltips name the role instead.
-        self._brain_label.setVisible(not compact)
-        self._executor_label.setVisible(not compact)
-        if compact:
-            self._chips_row.removeWidget(self._run_options)
-            # Keep the agent pickers packed to the left instead of spread
-            # across the row the run options used to fill.
-            self._chips_row.addStretch(1)
-            self._second_row.addWidget(self._run_options, 1)
-        else:
-            self._second_row.removeWidget(self._run_options)
-            stretch = self._chips_row.takeAt(self._chips_row.count() - 1)
-            del stretch
-            self._chips_row.addWidget(self._run_options, 1)
+        self.options_button.setToolTip(text)
+
+    def _show_options(self) -> None:
+        popup = self.options_popup
+        popup.adjustSize()
+        anchor = self.options_button.mapToGlobal(QPoint(0, 0))
+        popup.move(anchor.x(), anchor.y() - popup.height() - 6)
+        popup.show()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        # The viewport, not this panel, has the width the chips get: when the
-        # panel's own resizeEvent runs, the scroll area has not resized its
-        # viewport yet and still reports the previous width.
-        if watched is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
-            self._update_chip_rows()
-            return False
+        # The description editor is filtered from early in __init__, before
+        # the options button exists, so it is matched first.
+        if watched is not self.description_edit:
+            if watched is self.options_button and event.type() == QEvent.Type.Resize:
+                self._update_options_summary()
+            return super().eventFilter(watched, event)
         if watched is self.description_edit:
             if event.type() == QEvent.Type.FocusIn:
                 self._set_composer_focused(True)
@@ -370,6 +360,8 @@ class TaskPanel(QFrame):
         self._brain_label.setEnabled(dual)
         for widget in (self.brain_combo, self.retry_spin, self.confirm_plan_checkbox):
             widget.setEnabled(dual and editable)
+        self.options_button.setEnabled(editable)
+        self._update_options_summary()
 
     def _apply_inference(self) -> None:
         if not self.auto_detect_checkbox.isChecked():
@@ -406,19 +398,10 @@ class _ChipCombo(QComboBox):
     stays available as a tooltip when the text is clipped."""
 
     _MINIMUM_WIDTH = 96
-    COMFORTABLE_WIDTH = 140
 
     def minimumSizeHint(self) -> QSize:
         hint = super().minimumSizeHint()
         return QSize(min(hint.width(), self._MINIMUM_WIDTH), hint.height())
-
-
-def _comfortable_width(widget: QWidget) -> int:
-    # A combo's size hint is its longest item ("OpenAI Responses API"), so
-    # judging the row by it kept the options on two rows at any window
-    # width. Budget a typical label instead; a longer one is clipped.
-    hint = widget.sizeHint().width()
-    return min(hint, _ChipCombo.COMFORTABLE_WIDTH) if isinstance(widget, _ChipCombo) else hint
 
 
 def _chip_combo(role: str = "") -> QComboBox:

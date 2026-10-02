@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.constants import MAX_VISIBLE_LOG_LINES
+from app.ui.theme import BRAIN_COLOR, DANGER, DONE_COLOR, EXECUTOR_COLOR, TEXT
 
 
 class LogPanel(QWidget):
@@ -55,7 +56,7 @@ class LogPanel(QWidget):
         prefix_format.setFontWeight(600)
         cursor.insertText(f"[{source}] ", prefix_format)
         body_format = QTextCharFormat()
-        body_format.setForeground(QColor("#d7dce3"))
+        body_format.setForeground(QColor(TEXT))
         cursor.insertText(text + "\n", body_format)
         if self.auto_scroll.isChecked():
             self.editor.setTextCursor(cursor)
@@ -86,14 +87,14 @@ class LogPanel(QWidget):
 
 
 def _source_color(source: str) -> str:
+    # Darker tones than the chat accents: they sit on a white editor.
     return {
-        "System": "#87aebc",
-        "Process": "#9da8b5",
-        "Claude": "#d6a968",
-        "Codex": "#68b69f",
-        "Git": "#8e9fc8",
-        "Warning": "#d7b35f",
-        "Error": "#df7881",
-        "Success": "#66bd99",
-    }.get(source, "#9da8b5")
-
+        "System": "#2f6f86",
+        "Process": "#6f6f6d",
+        "Claude": BRAIN_COLOR,
+        "Codex": EXECUTOR_COLOR,
+        "Git": "#4b5fa0",
+        "Warning": "#9a6700",
+        "Error": DANGER,
+        "Success": DONE_COLOR,
+    }.get(source, "#6f6f6d")

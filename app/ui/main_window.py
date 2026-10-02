@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QResizeEvent, QTextCursor
+from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -114,6 +114,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self.task_panel.apply_settings(self.settings)
+        self.history_panel.set_workspace(self.settings.project_path)
+        self._set_home_layout(self.chat_view.is_empty())
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
         self.history_panel.set_history(self.history)
         self.status_panel.set_snapshot(StateSnapshot(TaskPhase.IDLE, "空闲"))
@@ -135,6 +137,7 @@ class MainWindow(QMainWindow):
         center_layout.setSpacing(0)
 
         header = QWidget()
+        self.header_bar = header
         header.setObjectName("headerBar")
         header.setFixedHeight(48)
         header_layout = QHBoxLayout(header)
@@ -166,10 +169,14 @@ class MainWindow(QMainWindow):
         self.task_panel = TaskPanel()
         # Matches the chat column (760px plus the panel's own margins).
         self.task_panel.setMaximumWidth(776)
-        self.task_panel.setMinimumHeight(280)
+        self.task_panel.setMinimumHeight(140)
         composer_layout.addWidget(self.task_panel, 1)
         composer_layout.addStretch(0)
         center_layout.addWidget(composer_host)
+        # On the home screen this takes the same share of height as the chat
+        # area above, which puts the title and the composer mid-window.
+        self._home_spacer = QWidget()
+        center_layout.addWidget(self._home_spacer, 1)
         self.splitter.addWidget(center)
 
         self.tabs = QTabWidget()
@@ -196,7 +203,12 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([248, 760, 380])
         self.tabs.hide()
         self.setCentralWidget(self.splitter)
-        self.statusBar().showMessage("就绪")
+        # The status bar appears only while it has something to say, so the
+        # sidebar and chat reach the bottom edge the rest of the time.
+        status_bar = self.statusBar()
+        status_bar.setSizeGripEnabled(False)
+        status_bar.messageChanged.connect(lambda message: status_bar.setVisible(bool(message)))
+        status_bar.hide()
 
     @staticmethod
     def _create_json_view():
@@ -225,7 +237,7 @@ class MainWindow(QMainWindow):
         self.chat_view.plan_approved.connect(self._approve_plan)
         self.chat_view.plan_replan_requested.connect(self._replan)
         self.chat_view.plan_discarded.connect(self._discard_plan)
-        self.chat_view.suggestion_selected.connect(self._use_suggestion)
+        self.chat_view.empty_changed.connect(self._set_home_layout)
         self.chat_view.apply_requested.connect(self._apply_run)
         self.chat_view.discard_requested.connect(self._discard_run)
 
@@ -268,11 +280,14 @@ class MainWindow(QMainWindow):
         # there is a run (or its outcome) to describe.
         self.phase_pill.setVisible(snapshot.message != "空闲")
 
-    def _use_suggestion(self, text: str) -> None:
-        editor = self.task_panel.description_edit
-        editor.setPlainText(text)
-        editor.setFocus()
-        editor.moveCursor(QTextCursor.MoveOperation.End)
+    def _notify(self, message: str) -> None:
+        # Transient: progress and outcomes stay in the chat and the inspector.
+        self.statusBar().showMessage(message, 8000)
+
+    def _set_home_layout(self, home: bool) -> None:
+        # The home screen has no thread yet: no header, composer centred.
+        self.header_bar.setVisible(not home)
+        self._home_spacer.setVisible(home)
 
     def _set_thread_title(self, description: str) -> None:
         first_line = description.splitlines()[0].strip() if description else ""
@@ -324,6 +339,7 @@ class MainWindow(QMainWindow):
         self._refresh_git()
 
     def _on_project_changed(self, project_path: str) -> None:
+        self.history_panel.set_workspace(project_path)
         self.settings.project_path = project_path
         self._settings_service.save(self.settings)
 
@@ -353,7 +369,7 @@ class MainWindow(QMainWindow):
             return True
         if answer == QMessageBox.StandardButton.Yes:
             self._after_git_init = then
-            self.statusBar().showMessage("正在执行 git init…")
+            self._notify("正在执行 git init…")
             self.git_manager.init_repository(project)
         return False
 
@@ -361,10 +377,10 @@ class MainWindow(QMainWindow):
         then, self._after_git_init = self._after_git_init, None
         if not ok:
             QMessageBox.warning(self, "git init 失败", message or "git init 失败。")
-            self.statusBar().showMessage("git init 失败")
+            self._notify("git init 失败")
             return
         self._append_log("System", message or "已初始化 Git 仓库。")
-        self.statusBar().showMessage("已初始化 Git 仓库")
+        self._notify("已初始化 Git 仓库")
         self._refresh_git()
         if then is not None:
             then()
@@ -390,7 +406,7 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return
             force = True
-        self.statusBar().showMessage("正在初始化 Dual Agent…")
+        self._notify("正在初始化 Dual Agent…")
         self.client.init_project(project, force=force)
 
     def _start_task(self, *, repository_checked: bool = False) -> None:
@@ -538,7 +554,7 @@ class MainWindow(QMainWindow):
     def _discard_plan(self) -> None:
         self._plan_source = None
         self._update_phase_pill(StateSnapshot(TaskPhase.IDLE, "计划已放弃"))
-        self.statusBar().showMessage("计划已放弃，代码未做任何修改。")
+        self._notify("计划已放弃，代码未做任何修改。")
 
     def _resume_run(self, source: AgentTask) -> None:
         run_id = resumable_run_id(source.status_json)
@@ -590,7 +606,7 @@ class MainWindow(QMainWindow):
             self.client.cancel_task()
 
     def _on_task_started(self) -> None:
-        self.statusBar().showMessage("任务正在运行")
+        self._notify("任务正在运行")
         self._append_log("System", "Orchestrator 已启动。")
 
     def _on_status_updated(self, payload: dict[str, object]) -> None:
@@ -632,7 +648,7 @@ class MainWindow(QMainWindow):
         self.history = self._history_service.add(task)
         self.history_panel.set_history(self.history)
         self.task_panel.set_running(False)
-        self.statusBar().showMessage(task.result_summary)
+        self._notify(task.result_summary)
         if self.tabs.isVisible():
             self.tabs.setCurrentWidget(self.result_panel)
         self._refresh_git()
@@ -712,7 +728,7 @@ class MainWindow(QMainWindow):
         if self.cli_detector.running:
             return
         self.environment_button.setEnabled(False)
-        self.statusBar().showMessage("正在检查环境…")
+        self._notify("正在检查环境…")
         self.cli_detector.check(
             self.settings.orchestrator_path,
             self.task_panel.project_path(),
@@ -721,7 +737,7 @@ class MainWindow(QMainWindow):
     def _on_environment_finished(self, status: EnvironmentStatus) -> None:
         self.environment_button.setEnabled(True)
         self.status_panel.set_environment(status)
-        self.statusBar().showMessage("环境检查完成" if status.ready else "环境检查发现问题")
+        self._notify("环境检查完成" if status.ready else "环境检查发现问题")
 
     def _apply_run(self, task: AgentTask) -> None:
         self._settle_run(task, "apply")
@@ -752,7 +768,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._settling = (task, action)
-        self.statusBar().showMessage("正在应用改动…" if action == "apply" else "正在丢弃改动…")
+        self._notify("正在应用改动…" if action == "apply" else "正在丢弃改动…")
         if action == "apply":
             self.client.apply_run(task.project_path, run_id)
         else:
@@ -783,7 +799,7 @@ class MainWindow(QMainWindow):
         self.chat_view.settle_isolation(task.id, outcome)
         self._shown_isolation = None
         self._append_log("System", output or outcome)
-        self.statusBar().showMessage(outcome)
+        self._notify(outcome)
         if conflicts:
             QMessageBox.warning(self, "需要解决冲突", output)
         self._refresh_git()
@@ -799,7 +815,7 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, title, output or "操作失败。")
             self._append_log("Error", output or f"{name} 失败。")
-        self.statusBar().showMessage("就绪")
+        self.statusBar().clearMessage()
 
     def _show_client_error(self, message: str) -> None:
         LOGGER.error(message)
@@ -816,6 +832,7 @@ class MainWindow(QMainWindow):
         self.settings.project_path = self.task_panel.project_path()
         self._settings_service.save(self.settings)
         self.task_panel.apply_settings(self.settings)
+        self.history_panel.set_workspace(self.settings.project_path)
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
         if path_changed:
             self.client.set_orchestrator_path(self.settings.orchestrator_path)

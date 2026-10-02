@@ -8,7 +8,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QLabel
 
 from app.models.task import AgentTask
 from app.ui.history_panel import HistoryPanel, _relative_time
@@ -58,8 +59,32 @@ def test_set_history_populates_thread_list(history_panel: HistoryPanel) -> None:
     tasks = [_task("修复登录问题"), _task("补充测试", "failed")]
     history_panel.set_history(tasks)
 
-    assert history_panel.list_widget.count() == len(tasks)
-    assert history_panel.list_widget.itemWidget(history_panel.list_widget.item(0)) is not None
+    items = history_panel.task_items()
+    assert [item.data(Qt.ItemDataRole.UserRole) for item in items] == tasks
+    assert all(history_panel.list_widget.itemWidget(item) is not None for item in items)
+    # One project heading above both tasks.
+    assert history_panel.list_widget.count() == len(tasks) + 1
+
+
+def test_history_is_grouped_by_project_and_groups_fold(history_panel: HistoryPanel) -> None:
+    first, second, third = _task("a"), _task("b"), _task("c")
+    second.project_path = "E:/work/other-app/"
+    history_panel.set_history([first, second, third])
+
+    labels = [
+        history_panel.list_widget.itemWidget(history_panel.list_widget.item(row)).findChild(QLabel, "projectGroupName")
+        for row in range(history_panel.list_widget.count())
+    ]
+    names = [label.text() for label in labels if label is not None]
+    assert names == ["project", "other-app"]
+    assert [item.data(Qt.ItemDataRole.UserRole) for item in history_panel.task_items()] == [first, third, second]
+
+    heading = history_panel.list_widget.item(0)
+    history_panel._on_clicked(heading)
+    assert history_panel.list_widget.item(1).isHidden() and history_panel.list_widget.item(2).isHidden()
+    assert not history_panel.list_widget.item(4).isHidden(), "other projects stay open"
+    history_panel._on_clicked(heading)
+    assert not history_panel.list_widget.item(1).isHidden()
 
 
 def test_sidebar_buttons_emit_requested_signals(history_panel: HistoryPanel) -> None:
@@ -81,7 +106,7 @@ def test_clear_selection_does_not_emit_task_selected(history_panel: HistoryPanel
     selected: list[AgentTask] = []
     history_panel.task_selected.connect(selected.append)
 
-    history_panel.list_widget.setCurrentRow(0)
+    history_panel.list_widget.setCurrentItem(history_panel.task_items()[0])
     assert selected == [task]
 
     history_panel.clear_selection()
@@ -105,7 +130,6 @@ def test_thread_items_tell_repeated_goals_apart() -> None:
         status="blocked", mode="single",
         started_at="2026-10-01T07:00:00+00:00", finished_at="2026-10-01T07:11:20+00:00",
     )
-    item = _ThreadItem(task)  # keep a reference: its labels die with it
-    second_line = item.findChild(QLabel, "threadItemTime").text()
-    assert second_line.startswith("阻塞 · ")
-    assert second_line.endswith(" · 11 分钟 · 单 agent")
+    item = _ThreadItem(task)
+    assert item.detail_text.startswith("阻塞 · ")
+    assert item.detail_text.endswith(" · 11 分钟 · 单 agent")

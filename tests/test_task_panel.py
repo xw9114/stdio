@@ -66,7 +66,7 @@ def test_composer_focus_property_tracks_editor_focus(task_panel: TaskPanel) -> N
     QApplication.processEvents()
     assert task_panel.composer.property("focused") == "true"
 
-    task_panel.project_edit.setFocus()
+    task_panel.browse_button.setFocus()
     QApplication.processEvents()
     assert task_panel.composer.property("focused") == "false"
 

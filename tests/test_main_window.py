@@ -711,7 +711,7 @@ def test_declining_the_confirmation_changes_nothing(tmp_path: Path, monkeypatch:
     window.close()
 
 
-def test_empty_state_starters_fill_the_composer_and_idle_hides_the_pill(
+def test_home_screen_hides_the_header_and_idle_hides_the_pill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = _isolate_data_dir(monkeypatch, tmp_path)
@@ -721,12 +721,9 @@ def test_empty_state_starters_fill_the_composer_and_idle_hides_the_pill(
     QApplication.processEvents()
 
     assert not window.phase_pill.isVisible(), "no badge on an idle, empty screen"
-    starters = window.chat_view.suggestion_buttons
-    assert len(starters) == 4
-    starters[0].click()
-    text = window.task_panel.description_edit.toPlainText()
-    assert text.startswith("修复这个问题：")
-    assert window.task_panel.description_edit.textCursor().atEnd()
+    assert not window.header_bar.isVisible(), "the home screen has no thread header"
+    window.chat_view.add_user_message("修复登录问题")
+    assert window.header_bar.isVisible()
 
     window._update_phase_pill(StateSnapshot(TaskPhase.RUNNING, "正在启动任务"))
     assert window.phase_pill.isVisible()

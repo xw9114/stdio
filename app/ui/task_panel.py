@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from math import ceil
+from pathlib import PureWindowsPath
 from typing import cast
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, QTimer, Qt, Signal
@@ -13,13 +14,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
-    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +26,8 @@ from PySide6.QtWidgets import (
 from app.constants import BRAIN_OPTIONS, EXECUTOR_OPTIONS, RUN_MODES
 from app.core.natural_language_parser import NaturalLanguageParser
 from app.models.settings import AppSettings
+from app.ui.icons import icon
+from app.ui.theme import TEXT_MUTED
 
 
 class TaskPanel(QFrame):
@@ -48,8 +49,8 @@ class TaskPanel(QFrame):
         self._parse_timer.setInterval(350)
         self._parse_timer.timeout.connect(self._apply_inference)
 
-        # The splitter may leave less height than an eight-line draft needs.
-        # Keeping the host scrollable prevents the workspace row from overlapping it.
+        # The window may leave less height than an eight-line draft needs;
+        # the host scrolls rather than letting the rows overlap.
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
@@ -66,7 +67,31 @@ class TaskPanel(QFrame):
         layout = QVBoxLayout(content)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
+
+        # Context chips above the prompt box, as in desktop agent apps: which
+        # project the task runs in (click to change) and its one-off setup.
+        self._project_path = ""
+        context = QHBoxLayout()
+        context.setContentsMargins(0, 0, 0, 0)
+        context.setSpacing(6)
+        self.browse_button = QPushButton()
+        self.browse_button.setObjectName("contextChip")
+        self.browse_button.setIcon(icon("folder", TEXT_MUTED, 15))
+        self.browse_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.browse_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.browse_button.clicked.connect(self.browse_requested)
+        context.addWidget(self.browse_button)
+        self.init_button = QPushButton("初始化")
+        self.init_button.setObjectName("contextChip")
+        self.init_button.setIcon(icon("refresh", TEXT_MUTED, 15))
+        self.init_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.init_button.setToolTip("在当前项目执行 dual-agent init（生成配置，必要时初始化 Git）")
+        self.init_button.clicked.connect(self.init_requested)
+        context.addWidget(self.init_button)
+        context.addStretch()
+        layout.addLayout(context)
+        self._show_project_path()
 
         self.composer = QFrame()
         self.composer.setObjectName("composer")
@@ -78,9 +103,7 @@ class TaskPanel(QFrame):
 
         self.description_edit = QPlainTextEdit()
         self.description_edit.setObjectName("composerInput")
-        self.description_edit.setPlaceholderText(
-            "描述任务、验收要求和测试范围…（Enter 发送，Shift+Enter 换行）"
-        )
+        self.description_edit.setPlaceholderText("描述任务和验收要求，Enter 发送，Shift+Enter 换行")
         self.description_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.description_edit.installEventFilter(self)
         self.description_edit.textChanged.connect(lambda: self._parse_timer.start())
@@ -101,6 +124,7 @@ class TaskPanel(QFrame):
         self._running = False
 
         self.mode_combo = _chip_combo()
+        self.mode_combo.setObjectName("flatChip")
         for index, run_mode in enumerate(RUN_MODES):
             self.mode_combo.addItem(run_mode.label, run_mode.key)
             self.mode_combo.setItemData(index, run_mode.description, Qt.ItemDataRole.ToolTipRole)
@@ -122,7 +146,7 @@ class TaskPanel(QFrame):
         self.start_button = QPushButton()
         self.start_button.setObjectName("sendButton")
         self.start_button.setFixedSize(32, 32)
-        self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp))
+        self.start_button.setIcon(icon("send", "#ffffff", 16))
         self.start_button.setToolTip("发送 (Enter)")
         self.start_button.clicked.connect(self.start_requested)
         chips.addWidget(self.start_button)
@@ -130,7 +154,7 @@ class TaskPanel(QFrame):
         self.stop_button = QPushButton()
         self.stop_button.setObjectName("stopButton")
         self.stop_button.setFixedSize(32, 32)
-        self.stop_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_button.setIcon(icon("stop", "#ffffff", 14))
         self.stop_button.setToolTip("停止任务")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_requested)
@@ -195,35 +219,17 @@ class TaskPanel(QFrame):
         ):
             signal.connect(lambda *_: self._update_options_summary())
 
-        workspace = QHBoxLayout()
-        workspace.setContentsMargins(0, 0, 0, 0)
-        workspace.setSpacing(8)
-        workspace_label = QLabel("工作区")
-        workspace_label.setObjectName("workspaceLabel")
-        workspace.addWidget(workspace_label)
-        self.project_edit = QLineEdit()
-        self.project_edit.setObjectName("workspacePath")
-        self.project_edit.setPlaceholderText(r"E:\projects\my-app")
-        self.project_edit.setFixedHeight(32)
-        self.project_edit.editingFinished.connect(
-            lambda: self.project_changed.emit(self.project_edit.text().strip())
-        )
-        workspace.addWidget(self.project_edit, 1)
-        self.browse_button = QPushButton("更换")
-        self.browse_button.setObjectName("toolButton")
-        self.browse_button.clicked.connect(self.browse_requested)
-        workspace.addWidget(self.browse_button)
-        self.init_button = QPushButton("初始化")
-        self.init_button.setObjectName("toolButton")
-        self.init_button.setToolTip("在当前项目执行 dual-agent init")
-        self.init_button.clicked.connect(self.init_requested)
-        workspace.addWidget(self.init_button)
-        layout.addLayout(workspace)
         layout.addStretch()
 
         self._update_description_height()
         QTimer.singleShot(0, self._update_description_height)
         self._update_options_summary()
+
+    def sizeHint(self) -> QSize:
+        # A scroll area's own hint ignores its content; use the content's, so
+        # the composer takes the height it needs and no blank band below it.
+        content = self.scroll_area.widget().sizeHint()
+        return QSize(content.width(), content.height() + 2)
 
     def _options_summary(self) -> str:
         executor = self.executor_combo.currentText()
@@ -289,6 +295,9 @@ class TaskPanel(QFrame):
         height = max(minimum, min(maximum, document_height))
         if self.description_edit.height() != height:
             self.description_edit.setFixedHeight(height)
+            # The panel is sized to its content (sizeHint), so the window
+            # re-lays out as the draft grows.
+            self.updateGeometry()
         policy = (
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
             if document_height > maximum
@@ -297,8 +306,16 @@ class TaskPanel(QFrame):
         if self.description_edit.verticalScrollBarPolicy() != policy:
             self.description_edit.setVerticalScrollBarPolicy(policy)
 
+    def _show_project_path(self) -> None:
+        path = self._project_path
+        # Windows path parsing also accepts forward slashes.
+        name = (PureWindowsPath(path.rstrip("\\/")).name or path) if path else "选择项目文件夹"
+        self.browse_button.setText(name)
+        self.browse_button.setToolTip(f"{path}\n点击更换项目" if path else "选择任务要修改的项目文件夹")
+
     def apply_settings(self, settings: AppSettings) -> None:
-        self.project_edit.setText(settings.project_path)
+        self._project_path = settings.project_path.strip()
+        self._show_project_path()
         self._set_combo_value(self.brain_combo, settings.default_brain)
         self._set_combo_value(self.executor_combo, settings.default_executor)
         self.retry_spin.setValue(settings.default_max_retries)
@@ -311,11 +328,12 @@ class TaskPanel(QFrame):
         self._retry_manual = False
 
     def set_project_path(self, path: str) -> None:
-        self.project_edit.setText(path)
-        self.project_changed.emit(path)
+        self._project_path = path.strip()
+        self._show_project_path()
+        self.project_changed.emit(self._project_path)
 
     def project_path(self) -> str:
-        return self.project_edit.text().strip()
+        return self._project_path
 
     def description(self) -> str:
         return self.description_edit.toPlainText().strip()
@@ -339,7 +357,6 @@ class TaskPanel(QFrame):
         self.stop_button.setVisible(running)
         self.browse_button.setEnabled(not running)
         self.init_button.setEnabled(not running)
-        self.project_edit.setEnabled(not running)
         self.executor_combo.setEnabled(not running)
         self.mode_combo.setEnabled(not running)
         self._running = running
@@ -361,6 +378,11 @@ class TaskPanel(QFrame):
         for widget in (self.brain_combo, self.retry_spin, self.confirm_plan_checkbox):
             widget.setEnabled(dual and editable)
         self.options_button.setEnabled(editable)
+        # Sized to the current mode's label rather than the longest one (the
+        # style also reserves room for an arrow), so the summary sits right
+        # next to it.
+        label_width = self.mode_combo.fontMetrics().horizontalAdvance(self.mode_combo.currentText())
+        self.mode_combo.setFixedWidth(label_width + 22)
         self._update_options_summary()
 
     def _apply_inference(self) -> None:

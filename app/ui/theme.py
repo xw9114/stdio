@@ -188,6 +188,16 @@ QLabel#resultStatus[status="passed"] {{ color: {DONE_COLOR}; }}
 QLabel#resultStatus[status="failed"] {{ color: {DANGER}; }}
 QLabel#resultStatus[status="muted"] {{ color: {TEXT_MUTED}; }}
 QLabel#emptyStateTitle {{ font-size: 24px; font-weight: 600; }}
+QPushButton#suggestionCard {{
+    background: {SURFACE};
+    color: {TEXT};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+    padding: 0;
+}}
+QPushButton#suggestionCard:hover {{ background: {SURFACE_RAISED}; border-color: {BORDER_STRONG}; }}
+QLabel#suggestionTitle {{ color: {TEXT}; font-weight: 600; background: transparent; }}
+QLabel#suggestionHint {{ color: {TEXT_FAINT}; font-size: 12px; background: transparent; }}
 QFrame#planCard {{ background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 12px; }}
 QFrame#planCard QLabel, QFrame#planCard QCheckBox {{ background: transparent; }}
 QLabel#planTitle {{ font-weight: 600; color: {ACTIVE_COLOR}; }}

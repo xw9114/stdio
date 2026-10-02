@@ -88,3 +88,24 @@ def test_clear_selection_does_not_emit_task_selected(history_panel: HistoryPanel
     assert history_panel.list_widget.currentRow() == -1
     assert not history_panel.list_widget.selectedItems()
     assert selected == [task]
+
+
+def test_thread_items_tell_repeated_goals_apart() -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from app.ui.history_panel import _ThreadItem, _compact_duration
+
+    assert _compact_duration("2026-10-01T07:00:00+00:00", "2026-10-01T07:00:45+00:00") == "45 秒"
+    assert _compact_duration("2026-10-01T07:00:00+00:00", "2026-10-01T07:11:20+00:00") == "11 分钟"
+    assert _compact_duration("2026-10-01T07:00:00+00:00", "2026-10-01T08:05:00+00:00") == "1 小时 5 分"
+    assert _compact_duration(None, "2026-10-01T07:00:00+00:00") == ""
+
+    task = AgentTask(
+        "给我做一个跑酷小游戏", "E:/t", "claude", "codex", 3,
+        status="blocked", mode="single",
+        started_at="2026-10-01T07:00:00+00:00", finished_at="2026-10-01T07:11:20+00:00",
+    )
+    item = _ThreadItem(task)  # keep a reference: its labels die with it
+    second_line = item.findChild(QLabel, "threadItemTime").text()
+    assert second_line.startswith("阻塞 · ")
+    assert second_line.endswith(" · 11 分钟 · 单 agent")

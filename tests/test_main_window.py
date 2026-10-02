@@ -13,7 +13,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QMessageBox
 
 import app.utils.paths as paths_module
-from app.core.task_state import TaskPhase, phase_from_status
+from app.core.task_state import StateSnapshot, TaskPhase, phase_from_status
 from app.models.settings import AppSettings
 from app.models.task import AgentTask
 from app.services.settings_service import SettingsService
@@ -708,4 +708,28 @@ def test_declining_the_confirmation_changes_nothing(tmp_path: Path, monkeypatch:
 
     assert calls == []
     assert task.status_json["isolation"]["state"] == "active"
+    window.close()
+
+
+def test_empty_state_starters_fill_the_composer_and_idle_hides_the_pill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    window.show()
+    QApplication.processEvents()
+
+    assert not window.phase_pill.isVisible(), "no badge on an idle, empty screen"
+    starters = window.chat_view.suggestion_buttons
+    assert len(starters) == 4
+    starters[0].click()
+    text = window.task_panel.description_edit.toPlainText()
+    assert text.startswith("修复这个问题：")
+    assert window.task_panel.description_edit.textCursor().atEnd()
+
+    window._update_phase_pill(StateSnapshot(TaskPhase.RUNNING, "正在启动任务"))
+    assert window.phase_pill.isVisible()
+    window._new_task()
+    assert not window.phase_pill.isVisible()
     window.close()

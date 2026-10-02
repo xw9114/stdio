@@ -8,6 +8,7 @@ from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -443,8 +444,36 @@ def _task_tooltip(task: dict[str, Any]) -> str:
     return "\n\n".join(line for line in lines if line)
 
 
+_STARTERS = (
+    (
+        "修复一个 bug",
+        "描述现象，附上复现步骤",
+        "修复这个问题：（描述现象）\n复现步骤：（如何触发）\n期望结果：（应该怎样）\n"
+        "修复后补一个能复现该问题的测试，并确认现有测试全部通过。",
+    ),
+    (
+        "做一个新功能",
+        "说清楚要做什么、怎样算完成",
+        "实现一个新功能：（功能描述）\n验收标准：（用户能看到/做到什么）\n"
+        "补充相应的测试，不要改动无关代码。",
+    ),
+    (
+        "补测试",
+        "为某个模块补齐测试",
+        "为（模块或文件）补充测试，覆盖正常流程和边界情况；只加测试，不改业务代码，确认全部测试通过。",
+    ),
+    (
+        "写 README",
+        "根据项目实际情况写说明文档",
+        "为这个项目写一份 README：项目用途、安装、运行、测试方法。所有命令和路径都要对照代码核实，不确定的地方标注 TODO。",
+    ),
+)
+
+
 class ChatView(QWidget):
     show_diff_requested = Signal()
+    # A starter on the empty state was clicked: text to put in the composer.
+    suggestion_selected = Signal(str)
     resume_requested = Signal(object)
     apply_requested = Signal(object)
     discard_requested = Signal(object)
@@ -498,6 +527,49 @@ class ChatView(QWidget):
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         empty_layout.addWidget(subtitle)
+        empty_layout.addSpacing(22)
+
+        # Starters fill the composer with a well-formed request (goal plus
+        # how to verify it) instead of leaving a blank box; the user edits the
+        # placeholders before sending.
+        starters = QGridLayout()
+        starters.setHorizontalSpacing(10)
+        starters.setVerticalSpacing(10)
+        self.suggestion_buttons: list[QPushButton] = []
+        for index, (label, hint, template) in enumerate(_STARTERS):
+            # Two labels inside the button: a QPushButton's own text has one
+            # style, and the hint should read quieter than the title.
+            button = QPushButton()
+            button.setObjectName("suggestionCard")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setToolTip(template)
+            card_layout = QVBoxLayout(button)
+            card_layout.setContentsMargins(14, 10, 14, 10)
+            card_layout.setSpacing(2)
+            for text, name in ((label, "suggestionTitle"), (hint, "suggestionHint")):
+                part = QLabel(text)
+                part.setObjectName(name)
+                part.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                card_layout.addWidget(part)
+            button.setFixedHeight(card_layout.sizeHint().height())
+            # The text lives in child labels, so the button's own size hint is
+            # tiny; give it a real minimum or the grid squeezes it to a sliver.
+            button.setMinimumWidth(180)
+            button.clicked.connect(lambda _checked=False, text=template: self.suggestion_selected.emit(text))
+            starters.addWidget(button, index // 2, index % 2)
+            self.suggestion_buttons.append(button)
+        starters_host = QWidget()
+        starters_host.setMaximumWidth(620)
+        starters_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        starters_host.setLayout(starters)
+        # Centred by stretches, not an alignment flag: an aligned widget is
+        # kept at its size hint, which would shrink the cards again.
+        centred = QHBoxLayout()
+        centred.addStretch()
+        centred.addWidget(starters_host, 1)
+        centred.addStretch()
+        empty_layout.addLayout(centred)
         empty_layout.addStretch()
         self._column_layout.addWidget(self._empty_state, 1)
         self._column_layout.addStretch()

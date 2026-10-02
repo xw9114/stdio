@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtGui import QCloseEvent, QResizeEvent, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
         self.history_panel.set_history(self.history)
         self.status_panel.set_snapshot(StateSnapshot(TaskPhase.IDLE, "空闲"))
+        self._update_phase_pill(StateSnapshot(TaskPhase.IDLE, "空闲"))
         if self.settings.project_path:
             QTimer.singleShot(0, self._refresh_git)
         QTimer.singleShot(0, self._after_show)
@@ -224,6 +225,7 @@ class MainWindow(QMainWindow):
         self.chat_view.plan_approved.connect(self._approve_plan)
         self.chat_view.plan_replan_requested.connect(self._replan)
         self.chat_view.plan_discarded.connect(self._discard_plan)
+        self.chat_view.suggestion_selected.connect(self._use_suggestion)
         self.chat_view.apply_requested.connect(self._apply_run)
         self.chat_view.discard_requested.connect(self._discard_run)
 
@@ -262,6 +264,15 @@ class MainWindow(QMainWindow):
 
     def _update_phase_pill(self, snapshot: StateSnapshot) -> None:
         self.phase_pill.set_full_text(snapshot.message)
+        # An "空闲" badge on an empty screen says nothing; show it only when
+        # there is a run (or its outcome) to describe.
+        self.phase_pill.setVisible(snapshot.message != "空闲")
+
+    def _use_suggestion(self, text: str) -> None:
+        editor = self.task_panel.description_edit
+        editor.setPlainText(text)
+        editor.setFocus()
+        editor.moveCursor(QTextCursor.MoveOperation.End)
 
     def _set_thread_title(self, description: str) -> None:
         first_line = description.splitlines()[0].strip() if description else ""
@@ -278,7 +289,7 @@ class MainWindow(QMainWindow):
         self.history_panel.clear_selection()
         self.status_panel.set_snapshot(StateSnapshot(TaskPhase.IDLE, "空闲"))
         self.thread_title.set_full_text("新任务")
-        self.phase_pill.set_full_text("空闲")
+        self._update_phase_pill(StateSnapshot(TaskPhase.IDLE, "空闲"))
         self.task_panel.description_edit.setFocus()
 
     def _after_show(self) -> None:

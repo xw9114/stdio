@@ -56,12 +56,23 @@ class _ThreadItem(QWidget):
             color = PENDING_COLOR
         dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
         status_row.addWidget(dot)
-        time_text = _relative_time(task.started_at)
-        mode = RUN_MODE_LABELS.get(task.mode) if task.mode != "auto" else None
-        time_label = QLabel(f"{time_text} · {mode}" if mode else time_text)
+        # Repeated goals ("给我做一个跑酷小游戏" five times) are told apart by
+        # outcome, time, duration and mode on the second line.
+        parts = [_STATUS_WORDS.get(status, "未完成"), _relative_time(task.started_at)]
+        took = _compact_duration(task.started_at, task.finished_at)
+        if took:
+            parts.append(took)
+        if task.mode != "auto":
+            parts.append(RUN_MODE_LABELS.get(task.mode, task.mode))
+        self._detail_text = " · ".join(parts)
+        time_label = QLabel(self._detail_text)
         time_label.setObjectName("threadItemTime")
-        status_row.addWidget(time_label)
-        status_row.addStretch()
+        time_label.setToolTip(self._detail_text)
+        time_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.detail = time_label
+        # The label takes the rest of the row itself: with a trailing stretch
+        # an Ignored-width label would be squeezed to nothing.
+        status_row.addWidget(time_label, 1)
         layout.addLayout(status_row)
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -76,6 +87,13 @@ class _ThreadItem(QWidget):
         self.title.setText(
             self.title.fontMetrics().elidedText(
                 self._title_text, Qt.TextElideMode.ElideRight, width
+            )
+        )
+        # The detail line (status · time · duration · mode) is cut with an
+        # ellipsis too; the full text stays in its tooltip.
+        self.detail.setText(
+            self.detail.fontMetrics().elidedText(
+                self._detail_text, Qt.TextElideMode.ElideRight, max(20, width - 14)
             )
         )
 
@@ -154,6 +172,34 @@ class HistoryPanel(QWidget):
         task = current.data(Qt.ItemDataRole.UserRole)
         if isinstance(task, AgentTask):
             self.task_selected.emit(task)
+
+
+_STATUS_WORDS = {
+    "passed": "完成",
+    "blocked": "阻塞",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "awaiting_approval": "待确认计划",
+    "running": "运行中",
+}
+
+
+def _compact_duration(started: str | None, finished: str | None) -> str:
+    """'45 秒', '11 分钟', '1 小时 5 分' - or '' when unknown."""
+    if not started or not finished:
+        return ""
+    try:
+        seconds = int((datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds())
+    except ValueError:
+        return ""
+    if seconds < 0:
+        return ""
+    if seconds < 60:
+        return f"{seconds} 秒"
+    if seconds < 3600:
+        return f"{round(seconds / 60)} 分钟"
+    hours, rest = divmod(seconds, 3600)
+    return f"{hours} 小时 {rest // 60} 分" if rest >= 60 else f"{hours} 小时"
 
 
 def _relative_time(value: str | None, now: datetime | None = None) -> str:

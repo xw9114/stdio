@@ -106,6 +106,8 @@ def test_result_adds_card_with_shared_metrics_and_diff_signal(chat_view: ChatVie
         result_summary="登录测试已通过。",
     )
     payload = {
+        "route": "reviewed",
+        "plan": {"routeReason": "一处登录逻辑，单次修改即可。"},
         "tasks": [
             {
                 "attempts": [
@@ -124,9 +126,9 @@ def test_result_adds_card_with_shared_metrics_and_diff_signal(chat_view: ChatVie
     assert chat_view.message_count() == before + 1
     assert chat_view.findChildren(_StepCard)[0].state == "done"
     assert any(label.text() == "✓ 任务完成" for label in chat_view.findChildren(QLabel))
-    metrics = [label for label in chat_view.findChildren(QLabel) if label.text() == "1 分 5 秒 · 返工 1 次"]
+    metrics = [label for label in chat_view.findChildren(QLabel) if label.text() == "执行后验收 · 1 分 5 秒 · 返工 1 次"]
     assert metrics, [label.text() for label in chat_view.findChildren(QLabel)]
-    assert metrics[0].toolTip() == "修改文件 2 个"
+    assert metrics[0].toolTip() == "执行后验收：一处登录逻辑，单次修改即可。\n\n修改文件 2 个"
     result = chat_view._messages[-1]
     result.diff_button.click()
     assert requested == [True]
@@ -166,3 +168,18 @@ def test_plan_card_shows_the_route_and_why(chat_view: ChatView) -> None:
     QApplication.processEvents()
     texts = [label.text() for label in chat_view.findChildren(QLabel, "planRoute")]
     assert texts == ["路线：执行后验收 — 一个会话就能完成的小游戏"]
+
+
+def test_lines_before_the_first_step_fold_into_it(chat_view: ChatView) -> None:
+    chat_view.add_user_message("修复登录问题")
+    chat_view.append_log("System", "Working in an isolated worktree on branch dual-agent/x.")
+    chat_view.set_phase(StateSnapshot(TaskPhase.PLANNING, "Brain 正在分析并制定计划"))
+    QApplication.processEvents()
+
+    cards = chat_view.findChildren(_StepCard)
+    visible = [card for card in cards if card.isVisible()]
+    assert [card.header.text() for card in visible] == ["正在分析并制定计划"]
+    assert "isolated worktree" in visible[0].log.toPlainText()
+    assert chat_view.message_count() == 2
+    gaps = [gap for gap in chat_view._gaps if gap.isVisible()]
+    assert len(gaps) == 1, "one gap between the bubble and the step"

@@ -280,9 +280,9 @@ class MainWindow(QMainWindow):
         # there is a run (or its outcome) to describe.
         self.phase_pill.setVisible(snapshot.message != "空闲")
 
-    def _notify(self, message: str) -> None:
+    def _notify(self, message: str, timeout_ms: int = 8000) -> None:
         # Transient: progress and outcomes stay in the chat and the inspector.
-        self.statusBar().showMessage(message, 8000)
+        self.statusBar().showMessage(message, timeout_ms)
 
     def _set_home_layout(self, home: bool) -> None:
         # The home screen has no thread yet: no header, composer centred.
@@ -671,6 +671,10 @@ class MainWindow(QMainWindow):
         # replayed history task.
         if self.current_task is not None:
             self._feed_chat(source, text)
+            if "hit a usage limit" in text and "Continuing this run with" in text:
+                # The orchestrator switched the Brain after Claude's usage
+                # limit; say so plainly instead of leaving it in a step log.
+                self._notify("Brain 的额度用完了，本次任务已自动改用 Codex 作为 Brain 继续。", 60_000)
         if self._log_handle:
             self._log_handle.write(f"[{source}] {text}\n")
             self._log_handle.flush()

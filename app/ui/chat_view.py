@@ -229,7 +229,12 @@ class _ResultCard(QFrame):
         top.addWidget(status_label)
         top.addStretch()
         retries, _, files = _result_counts(payload)
-        numbers = [_duration(task.started_at, task.finished_at)]
+        # Which route the Brain chose is otherwise only visible when the plan
+        # is confirmed first; it explains why a run did or skipped review.
+        plan = (payload or {}).get("plan") if isinstance((payload or {}).get("plan"), dict) else {}
+        route = ROUTE_LABELS.get(str((payload or {}).get("route") or ""))
+        numbers = [route] if route and (payload or {}).get("mode") != "single" else []
+        numbers.append(_duration(task.started_at, task.finished_at))
         if retries:
             numbers.append(f"返工 {retries} 次")
         usage = usage_summary(payload)
@@ -237,8 +242,14 @@ class _ResultCard(QFrame):
             numbers.append(usage)
         metrics = QLabel(" · ".join(numbers))
         metrics.setObjectName("stepMeta")
+        tips = []
+        reason = str(plan.get("routeReason") or "").strip()
+        if route and reason:
+            tips.append(f"{route}：{reason}")
         if files is not None:
-            metrics.setToolTip(f"修改文件 {files} 个")
+            tips.append(f"修改文件 {files} 个")
+        if tips:
+            metrics.setToolTip("\n\n".join(tips))
         top.addWidget(metrics)
         layout.addLayout(top)
 
@@ -440,7 +451,13 @@ def _task_tooltip(task: dict[str, Any]) -> str:
     commands = [str(item) for item in task.get("validationCommands") or []]
     if commands:
         lines.append("验证命令：\n" + "\n".join(commands))
+    effort = _EFFORT_WORDS.get(str(task.get("effort") or ""))
+    if effort:
+        lines.append(f"执行强度：{effort}（Brain 按难度设定，返工时自动提高）")
     return "\n\n".join(line for line in lines if line)
+
+
+_EFFORT_WORDS = {"low": "低", "medium": "中", "high": "高"}
 
 
 class ChatView(QWidget):
@@ -462,6 +479,7 @@ class ChatView(QWidget):
         self._gaps: list[QWidget] = []
         self._active_card: _StepCard | None = None
         self._active_key: tuple[TaskPhase, int | None] | None = None
+        self._preparing_card: _StepCard | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -509,6 +527,7 @@ class ChatView(QWidget):
         self._gaps.clear()
         self._active_card = None
         self._active_key = None
+        self._preparing_card = None
         self._set_empty(True)
         self.scroll_area.verticalScrollBar().setValue(0)
 
@@ -534,8 +553,14 @@ class ChatView(QWidget):
             key = (snapshot.phase, snapshot.attempt)
             if key == self._active_key:
                 return
+            # Lines printed before the first step (the worktree notice, the
+            # run id) opened a "准备中" card; fold them into the real step
+            # instead of leaving an empty-looking row above it.
+            earlier = self._take_preparing_card()
             self._end_active("done")
             card = _StepCard(snapshot.message, snapshot.attempt, snapshot.phase)
+            if earlier:
+                card.log.setPlainText(earlier)
             card.set_state("active")
             self._active_card = card
             self._active_key = key
@@ -545,11 +570,33 @@ class ChatView(QWidget):
         elif snapshot.phase in {TaskPhase.BLOCKED, TaskPhase.FAILED, TaskPhase.CANCELLED}:
             self._end_active("failed")
 
+    def _take_preparing_card(self) -> str:
+        card = self._preparing_card
+        self._preparing_card = None
+        if card is None or not self._messages or self._messages[-1] is not card:
+            return ""
+        text = card.log.toPlainText()
+        index = self._column_layout.indexOf(card)
+        before = self._column_layout.itemAt(index - 1).widget() if index > 0 else None
+        # The step that takes its place adds its own gap.
+        if before is not None and before in self._gaps:
+            self._gaps.remove(before)
+            self._column_layout.removeWidget(before)
+            before.hide()
+            before.deleteLater()
+        self._messages.pop()
+        self._column_layout.removeWidget(card)
+        card.hide()
+        card.deleteLater()
+        self._active_card = None
+        return text
+
     def append_log(self, source: str, text: str) -> None:
         if self._active_card is None:
             self._active_card = _StepCard("准备中")
             self._active_card.set_state("active")
             self._active_key = None
+            self._preparing_card = self._active_card
             self._append_message(self._active_card)
         # stderr ("Error" source) is deliberately not treated as failure:
         # agents write routine warnings there (Codex prints dozens of skill

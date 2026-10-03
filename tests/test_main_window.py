@@ -730,3 +730,18 @@ def test_home_screen_hides_the_header_and_idle_hides_the_pill(
     window._new_task()
     assert not window.phase_pill.isVisible()
     window.close()
+
+
+def test_brain_fallback_is_announced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3)
+    window._append_log(
+        "Process",
+        "[dual-agent] Brain (claude) hit a usage limit: claude failed: You've hit your session limit. "
+        "Continuing this run with codex as the read-only Brain.",
+    )
+    assert "改用 Codex 作为 Brain" in window.statusBar().currentMessage()
+    window.current_task = None
+    window.close()

@@ -24,6 +24,7 @@ from app.constants import ROUTE_LABELS
 from app.core.task_state import StateSnapshot, TaskPhase, usage_summary
 from app.models.task import AgentTask
 from app.ui.result_panel import _duration, _result_counts
+from app.ui.shadow import ShadowSurface
 from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
 
 
@@ -490,12 +491,16 @@ class ChatView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("chatScroll")
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         layout.addWidget(self.scroll_area)
 
-        content = QWidget()
+        # Paints the soft shadows under cards; their margins leave it room.
+        content = ShadowSurface()
+        content.setObjectName("chatContent")
+        self._surface = content
         self.scroll_area.setWidget(content)
         centered_layout = QHBoxLayout(content)
         centered_layout.setContentsMargins(24, 20, 24, 20)
@@ -670,6 +675,8 @@ class ChatView(QWidget):
         # The column ends with the empty-state placeholder and a stretch.
         self._column_layout.insertWidget(self._column_layout.count() - 2, message)
         self._messages.append(message)
+        if isinstance(message, (_ResultCard, _PlanCard)):
+            self._surface.add_shadow(message, 12)
         if near_bottom:
             QTimer.singleShot(0, self, self._scroll_to_bottom)
 

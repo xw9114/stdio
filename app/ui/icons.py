@@ -25,6 +25,8 @@ _PATHS = {
     "panel": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
     "pulse": '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
     "chevron": '<path d="m9 6 6 6-6 6"/>',
+    "image": '<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="9.5" r="1.8"/>'
+    '<path d="m4 18 5.5-5.5 3.5 3.5 2.5-2.5L20 18"/>',
 }
 
 

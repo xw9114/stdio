@@ -767,3 +767,53 @@ def test_history_entries_of_every_status_replay(status: str, tmp_path: Path, mon
     if status in {"continued", "discarded"}:
         assert cards and cards[-1].resume_button is None, "a settled entry offers no second continuation"
     window.close()
+
+
+def test_wallpaper_choice_is_saved_and_turns_the_panels_to_glass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False, wallpaper="")
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+    assert not window.canvas.has_wallpaper
+    assert "rgba(255, 255, 255, 0.50)" not in app.styleSheet()
+
+    window._set_wallpaper("preset:aurora")
+    assert window.canvas.has_wallpaper
+    assert "rgba(255, 255, 255, 0.50)" in app.styleSheet()
+    saved = json.loads((data_dir / "settings.json").read_text(encoding="utf-8"))
+    assert saved["wallpaper"] == "preset:aurora"
+
+    window._refresh_wallpaper_menu()
+    checked = [action.data() for action in window._wallpaper_actions.actions() if action.isChecked()]
+    assert checked == ["preset:aurora"]
+
+    window._set_wallpaper(str(tmp_path / "missing.jpg"))
+    assert not window.canvas.has_wallpaper, "a missing image falls back to no wallpaper"
+    assert "missing.jpg" in window.statusBar().currentMessage()
+    window._set_wallpaper("")
+    window.close()
+
+
+def test_settings_preview_is_undone_when_the_dialog_is_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ui import main_window as module
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False, wallpaper="")
+    window = MainWindow()
+
+    class PreviewThenCancel:
+        def __init__(self, settings, parent, preview):  # type: ignore[no-untyped-def]
+            self._preview = preview
+
+        def exec(self) -> bool:
+            self._preview("preset:dusk", 2, 40)
+            assert window.canvas.has_wallpaper, "the dialog previews live"
+            return False
+
+    monkeypatch.setattr(module, "SettingsDialog", PreviewThenCancel)
+    window._show_settings()
+    assert not window.canvas.has_wallpaper
+    assert window.settings.wallpaper == ""
+    window.close()

@@ -5,6 +5,9 @@ from typing import Any
 
 from app.constants import BRAIN_OPTIONS, DEFAULT_ORCHESTRATOR_PATH, EXECUTOR_OPTIONS, normalize_run_mode
 
+# A soft built-in gradient (see app/ui/wallpaper.py); "" turns it off.
+DEFAULT_WALLPAPER = "preset:mist"
+
 
 @dataclass(slots=True)
 class AppSettings:
@@ -18,6 +21,13 @@ class AppSettings:
     auto_detect_roles: bool = True
     confirm_plan: bool = True
     run_mode: str = "auto"
+    # "" for none, "preset:<key>" for a built-in gradient, else an image path.
+    wallpaper: str = DEFAULT_WALLPAPER
+    # 0 (sharp) to 3 (strong) for images; presets are soft already.
+    wallpaper_blur: int = 2
+    # Percent of extra light veil over the wallpaper, on top of what the
+    # image needs for legible text.
+    wallpaper_veil: int = 20
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +55,9 @@ class AppSettings:
             run_mode=normalize_run_mode(
                 value.get("run_mode", "single" if value.get("single_agent") is True else "auto")
             ),
+            wallpaper=_string(value.get("wallpaper"), defaults.wallpaper),
+            wallpaper_blur=_bounded_int(value.get("wallpaper_blur"), defaults.wallpaper_blur, 0, 3),
+            wallpaper_veil=_bounded_int(value.get("wallpaper_veil"), defaults.wallpaper_veil, 0, 90),
         )
 
 

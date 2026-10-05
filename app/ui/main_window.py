@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -49,6 +51,8 @@ from app.ui.result_panel import ResultPanel
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.status_panel import StatusPanel
 from app.ui.task_panel import TaskPanel
+from app.ui.theme import application_style
+from app.ui.wallpaper import IMAGE_FILTER, PRESETS, WallpaperCanvas, is_preset, load_wallpaper, preset_value
 from app.ui.welcome_dialog import WelcomeDialog
 from app.utils.paths import logs_directory
 
@@ -115,6 +119,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.task_panel.apply_settings(self.settings)
         self.history_panel.set_workspace(self.settings.project_path)
+        self._apply_appearance()
         self._set_home_layout(self.chat_view.is_empty())
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
         self.history_panel.set_history(self.history)
@@ -163,12 +168,14 @@ class MainWindow(QMainWindow):
 
         composer_host = QWidget()
         composer_layout = QHBoxLayout(composer_host)
-        composer_layout.setContentsMargins(24, 0, 24, 16)
+        # 16 here plus the panel's own 16 lines the composer up with the chat
+        # column; the panel's margin holds the composer's shadow.
+        composer_layout.setContentsMargins(16, 0, 16, 0)
         composer_layout.setSpacing(0)
         composer_layout.addStretch(0)
         self.task_panel = TaskPanel()
         # Matches the chat column (760px plus the panel's own margins).
-        self.task_panel.setMaximumWidth(776)
+        self.task_panel.setMaximumWidth(792)
         self.task_panel.setMinimumHeight(140)
         composer_layout.addWidget(self.task_panel, 1)
         composer_layout.addStretch(0)
@@ -180,6 +187,9 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(center)
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("inspector")
+        # Paints its own (frosted) background over a wallpaper.
+        self.tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.tabs.setMinimumWidth(220)
         self.tabs.setMaximumWidth(500)
         self.tabs.tabBar().setUsesScrollButtons(True)
@@ -202,7 +212,13 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(2, 0)
         self.splitter.setSizes([248, 760, 380])
         self.tabs.hide()
-        self.setCentralWidget(self.splitter)
+        # Everything sits on the wallpaper canvas, which paints the backdrop.
+        self.canvas = WallpaperCanvas()
+        canvas_layout = QVBoxLayout(self.canvas)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.addWidget(self.splitter)
+        self.setCentralWidget(self.canvas)
+        self._build_wallpaper_menu()
         # The status bar appears only while it has something to say, so the
         # sidebar and chat reach the bottom edge the rest of the time.
         status_bar = self.statusBar()
@@ -279,6 +295,66 @@ class MainWindow(QMainWindow):
         # An "空闲" badge on an empty screen says nothing; show it only when
         # there is a run (or its outcome) to describe.
         self.phase_pill.setVisible(snapshot.message != "空闲")
+
+    def _build_wallpaper_menu(self) -> None:
+        menu = QMenu(self)
+        self._wallpaper_actions = QActionGroup(menu)
+        self._wallpaper_actions.setExclusive(True)
+        choices = [("无壁纸", "")] + [(f"渐变 · {preset.label}", preset_value(preset.key)) for preset in PRESETS]
+        for label, value in choices:
+            action = QAction(label, menu, checkable=True)
+            action.setData(value)
+            action.triggered.connect(lambda _checked=False, chosen=value: self._set_wallpaper(chosen))
+            self._wallpaper_actions.addAction(action)
+            menu.addAction(action)
+        # The current image, when one is set; filled in when the menu opens.
+        self._image_action = QAction("", menu, checkable=True)
+        self._image_action.triggered.connect(lambda _checked=False: self._set_wallpaper(self.settings.wallpaper))
+        self._wallpaper_actions.addAction(self._image_action)
+        menu.addAction(self._image_action)
+        menu.addSeparator()
+        menu.addAction("选择本地图片…", self._choose_wallpaper_image)
+        menu.addAction("调整模糊和遮罩…", self._show_settings)
+        menu.aboutToShow.connect(self._refresh_wallpaper_menu)
+        self.history_panel.wallpaper_button.setMenu(menu)
+
+    def _refresh_wallpaper_menu(self) -> None:
+        current = self.settings.wallpaper
+        image = bool(current) and not is_preset(current)
+        self._image_action.setVisible(image)
+        if image:
+            self._image_action.setText(f"图片 · {Path(current).name}")
+        for action in self._wallpaper_actions.actions():
+            action.setChecked(action is self._image_action if image else action.data() == current)
+
+    def _choose_wallpaper_image(self) -> None:
+        current = self.settings.wallpaper
+        start = str(Path(current).parent) if current and not is_preset(current) else str(Path.home() / "Pictures")
+        filename, _selected = QFileDialog.getOpenFileName(self, "选择壁纸图片", start, IMAGE_FILTER)
+        if filename:
+            self._set_wallpaper(filename)
+
+    def _set_wallpaper(self, wallpaper: str) -> None:
+        self.settings.wallpaper = wallpaper
+        self._settings_service.save(self.settings)
+        self._apply_appearance()
+
+    def _apply_appearance(
+        self, wallpaper: str | None = None, blur: int | None = None, veil: int | None = None
+    ) -> None:
+        """Shows the saved wallpaper, or a preview of the given values."""
+        wallpaper = self.settings.wallpaper if wallpaper is None else wallpaper
+        image = load_wallpaper(
+            wallpaper, self.settings.wallpaper_blur if blur is None else blur
+        )
+        if wallpaper and image is None and not is_preset(wallpaper):
+            self._notify(f"无法打开壁纸图片：{wallpaper}")
+        self.canvas.set_wallpaper(image, self.settings.wallpaper_veil if veil is None else veil)
+        # Panels turn translucent only when there is something behind them.
+        app = QApplication.instance()
+        style = application_style(glass=image is not None)
+        if isinstance(app, QApplication) and app.styleSheet() != style:
+            app.setStyleSheet(style)
 
     def _notify(self, message: str, timeout_ms: int = 8000) -> None:
         # Transient: progress and outcomes stay in the chat and the inspector.
@@ -846,8 +922,9 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Dual Agent 错误", message)
 
     def _show_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = SettingsDialog(self.settings, self, preview=self._apply_appearance)
         if not dialog.exec():
+            self._apply_appearance()  # undo the dialog's live preview
             return
         updated = dialog.settings()
         path_changed = updated.orchestrator_path != self.settings.orchestrator_path
@@ -857,6 +934,7 @@ class MainWindow(QMainWindow):
         self.task_panel.apply_settings(self.settings)
         self.history_panel.set_workspace(self.settings.project_path)
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
+        self._apply_appearance()
         if path_changed:
             self.client.set_orchestrator_path(self.settings.orchestrator_path)
         self._check_environment()

@@ -27,6 +27,7 @@ from app.constants import BRAIN_OPTIONS, EXECUTOR_OPTIONS, RUN_MODES
 from app.core.natural_language_parser import NaturalLanguageParser
 from app.models.settings import AppSettings
 from app.ui.icons import icon
+from app.ui.shadow import ShadowSurface
 from app.ui.theme import TEXT_MUTED
 
 
@@ -61,12 +62,15 @@ class TaskPanel(QFrame):
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer_layout.addWidget(self.scroll_area)
 
-        content = QWidget()
+        # Paints the composer's soft shadow; the side and bottom margins are
+        # the room it spreads into.
+        content = ShadowSurface()
         content.setObjectName("composerContent")
+        self._surface = content
         self.scroll_area.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(16, 8, 16, 18)
         layout.setSpacing(8)
 
         # Context chips above the prompt box, as in desktop agent apps: which
@@ -100,6 +104,7 @@ class TaskPanel(QFrame):
         composer_layout.setContentsMargins(12, 10, 12, 10)
         composer_layout.setSpacing(8)
         layout.addWidget(self.composer)
+        content.add_shadow(self.composer, 14)
 
         self.description_edit = QPlainTextEdit()
         self.description_edit.setObjectName("composerInput")

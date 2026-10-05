@@ -167,6 +167,16 @@ class HistoryPanel(QWidget):
         self.workspace_label.setObjectName("footerStatus")
         self.workspace_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         footer_layout.addWidget(self.workspace_label, 1)
+        # Wallpaper choices; MainWindow fills in the menu, which needs the
+        # settings this panel does not hold.
+        self.wallpaper_button = QToolButton()
+        self.wallpaper_button.setObjectName("iconButton")
+        self.wallpaper_button.setIcon(icon("image", TEXT_MUTED, 18))
+        self.wallpaper_button.setIconSize(QSize(18, 18))
+        self.wallpaper_button.setToolTip("壁纸")
+        self.wallpaper_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.wallpaper_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        footer_layout.addWidget(self.wallpaper_button)
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("iconButton")
         self.settings_button.setIcon(icon("settings", TEXT_MUTED, 18))

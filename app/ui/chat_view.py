@@ -456,6 +456,10 @@ def _task_tooltip(task: dict[str, Any]) -> str:
     effort = _EFFORT_WORDS.get(str(task.get("effort") or ""))
     if effort:
         lines.append(f"执行强度：{effort}（Brain 按难度设定，返工时自动提高）")
+    if task.get("useSkills") is not None:
+        lines.append(
+            "Codex 技能：" + ("开启（界面和视觉类任务）" if task.get("useSkills") else "关闭（省 token）")
+        )
     return "\n\n".join(line for line in lines if line)
 
 

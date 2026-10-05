@@ -59,3 +59,23 @@ def test_run_mode_migrates_from_older_settings_and_history() -> None:
     assert AgentTask.from_dict({**base, "mode": "dual"}).mode == "planned"
     assert AgentTask.from_dict({**base, "mode": "single"}).mode == "single"
     assert AgentTask.from_dict({**base, "mode": "auto"}).mode == "auto"
+
+
+def test_removed_agent_choices_fall_back_to_defaults() -> None:
+    settings = AppSettings.from_dict({"default_brain": "sub2api", "default_executor": "sub2api"})
+    assert settings.default_brain == "claude"
+    assert settings.default_executor == "codex"
+    kept = AppSettings.from_dict({"default_brain": "codex", "default_executor": "openai-api"})
+    assert (kept.default_brain, kept.default_executor) == ("codex", "openai-api")
+
+
+def test_history_update_keeps_the_entry_in_place(tmp_path: Path) -> None:
+    service = HistoryService(tmp_path / "history.json")
+    first = AgentTask("first", "C:/p", "claude", "codex", 1, status="awaiting_approval")
+    second = AgentTask("second", "C:/p", "claude", "codex", 1)
+    service.add(first)
+    service.add(second)
+    first.status = "continued"
+    history = service.update(first)
+    assert [task.description for task in history] == ["second", "first"]
+    assert history[1].status == "continued"

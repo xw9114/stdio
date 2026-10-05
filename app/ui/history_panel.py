@@ -258,6 +258,10 @@ _STATUS_WORDS = {
     "failed": "失败",
     "cancelled": "已取消",
     "awaiting_approval": "待确认计划",
+    # A plan or stopped run that was taken up again (approved, replanned,
+    # resumed); its continuation is the newer entry.
+    "continued": "已继续",
+    "discarded": "已放弃",
     "running": "运行中",
 }
 

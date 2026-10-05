@@ -18,8 +18,8 @@ def test_real_orchestrator_help_contract() -> None:
     )
     assert result.returncode == 0
     assert "dual-agent run" in result.stdout
-    assert "--brain anthropic-api|openai-api|sub2api|claude|codex" in result.stdout
-    assert "--executor openai-api|sub2api|claude|codex" in result.stdout
+    assert "--brain anthropic-api|openai-api|claude|codex" in result.stdout
+    assert "--executor openai-api|claude|codex" in result.stdout
 
 
 def test_real_orchestrator_status_without_runs_is_non_json_but_successful() -> None:

@@ -515,6 +515,14 @@ class MainWindow(QMainWindow):
             mode=source.mode,
         )
 
+    def _close_source(self, source: AgentTask, status: str) -> None:
+        # The entry a plan was approved, replanned, resumed or discarded from
+        # otherwise kept its "awaiting approval" (or stopped) state and stood
+        # in the sidebar as if it still needed attention.
+        source.status = status
+        self.history = self._history_service.update(source)
+        self.history_panel.set_history(self.history)
+
     def _busy(self) -> bool:
         if self.client.running:
             QMessageBox.information(self, "任务进行中", "请等当前任务结束后再继续。")
@@ -527,6 +535,7 @@ class MainWindow(QMainWindow):
         if source is None or run_id is None or self._busy():
             return
         self._plan_source = None
+        self._close_source(source, "continued")
         task = self._follow_up_task(source)
         meta = "开始执行计划" + (f" · 跳过 {', '.join(skip)}" if skip else "")
         self._launch(
@@ -542,6 +551,7 @@ class MainWindow(QMainWindow):
         if source is None or self._busy():
             return
         self._plan_source = None
+        self._close_source(source, "continued")
         task = self._follow_up_task(source, f"{source.description}\n\n补充说明：\n{note}")
         self._launch(
             task,
@@ -552,6 +562,8 @@ class MainWindow(QMainWindow):
         )
 
     def _discard_plan(self) -> None:
+        if self._plan_source is not None:
+            self._close_source(self._plan_source, "discarded")
         self._plan_source = None
         self._update_phase_pill(StateSnapshot(TaskPhase.IDLE, "计划已放弃"))
         self._notify("计划已放弃，代码未做任何修改。")
@@ -567,6 +579,7 @@ class MainWindow(QMainWindow):
         )
         if not accepted:
             return
+        self._close_source(source, "continued")
         task = self._follow_up_task(source)
         self._launch(
             task,
@@ -586,7 +599,11 @@ class MainWindow(QMainWindow):
             self._plan_source = task
             self.chat_view.add_plan(plan)
             return
-        resumable = task.status != TaskPhase.PASSED and resumable_run_id(payload) is not None
+        # A continued entry was already taken up again in a newer entry.
+        resumable = (
+            task.status not in {TaskPhase.PASSED, "continued", "discarded"}
+            and resumable_run_id(payload) is not None
+        )
         isolation = active_isolation(payload)
         self._shown_isolation = isolation
         self.chat_view.add_result(task, payload, resumable=resumable, isolation=isolation)

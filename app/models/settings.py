@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.constants import DEFAULT_ORCHESTRATOR_PATH, normalize_run_mode
+from app.constants import BRAIN_OPTIONS, DEFAULT_ORCHESTRATOR_PATH, EXECUTOR_OPTIONS, normalize_run_mode
 
 
 @dataclass(slots=True)
@@ -28,8 +28,10 @@ class AppSettings:
         return cls(
             orchestrator_path=_string(value.get("orchestrator_path"), defaults.orchestrator_path),
             project_path=_string(value.get("project_path"), defaults.project_path),
-            default_brain=_string(value.get("default_brain"), defaults.default_brain),
-            default_executor=_string(value.get("default_executor"), defaults.default_executor),
+            # An agent that is no longer offered (sub2api) falls back to the
+            # default: the picker would otherwise silently show its first entry.
+            default_brain=_choice(value.get("default_brain"), BRAIN_OPTIONS, defaults.default_brain),
+            default_executor=_choice(value.get("default_executor"), EXECUTOR_OPTIONS, defaults.default_executor),
             default_max_retries=_bounded_int(
                 value.get("default_max_retries"), defaults.default_max_retries, 0, 20
             ),
@@ -48,6 +50,10 @@ class AppSettings:
 
 def _string(value: object, default: str) -> str:
     return value if isinstance(value, str) else default
+
+
+def _choice(value: object, options: tuple, default: str) -> str:
+    return value if isinstance(value, str) and any(option.key == value for option in options) else default
 
 
 def _boolean(value: object, default: bool) -> bool:

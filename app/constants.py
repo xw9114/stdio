@@ -16,7 +16,6 @@ AGENT_OPTIONS = (
     AgentOption("codex", "Codex CLI"),
     AgentOption("anthropic-api", "Claude API", supports_executor=False),
     AgentOption("openai-api", "OpenAI Responses API"),
-    AgentOption("sub2api", "Sub2API"),
 )
 
 AGENT_LABELS = {option.key: option.label for option in AGENT_OPTIONS}

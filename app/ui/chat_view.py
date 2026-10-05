@@ -216,6 +216,8 @@ class _ResultCard(QFrame):
             TaskPhase.BLOCKED: ("任务已阻塞", "failed"),
             TaskPhase.FAILED: ("任务失败", "failed"),
             TaskPhase.CANCELLED: ("任务已取消", "muted"),
+            "continued": ("已在后续记录中继续", "muted"),
+            "discarded": ("计划已放弃", "muted"),
         }
         title, status = titles.get(task.status, ("任务结束", "muted"))
         # Status on the left and the key numbers on the right of one line,

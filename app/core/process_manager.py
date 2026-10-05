@@ -156,6 +156,10 @@ class TaskProcessManager(QObject):
         self._stderr_lines = IncrementalLineDecoder()
         self._cancel_requested = False
         self._reported_start_error = False
+        # Counts starts, so a delayed kill scheduled by cancel() only ever
+        # hits the process it was meant for: resuming within the grace
+        # period used to kill the new run (exit code 62097, no output).
+        self._generation = 0
         self._process.readyReadStandardOutput.connect(self._read_stdout)
         self._process.readyReadStandardError.connect(self._read_stderr)
         self._process.started.connect(self.started)
@@ -177,6 +181,7 @@ class TaskProcessManager(QObject):
         self._stderr_lines = IncrementalLineDecoder()
         self._cancel_requested = False
         self._reported_start_error = False
+        self._generation += 1
         configure_process(self._process, command)
         self._process.start()
 
@@ -189,18 +194,19 @@ class TaskProcessManager(QObject):
         if not self.running:
             return
         self._cancel_requested = True
+        generation = self._generation
         pid = self.process_id
         if pid > 0:
             self._killer = QProcess(self)
             self._killer.finished.connect(self._killer.deleteLater)
             self._killer.start("taskkill.exe", ["/pid", str(pid), "/t", "/f"])
-            QTimer.singleShot(3_000, self._kill_if_running)
+            QTimer.singleShot(3_000, lambda: self._kill_if_running(generation))
             return
         self._process.terminate()
-        QTimer.singleShot(3_000, self._kill_if_running)
+        QTimer.singleShot(3_000, lambda: self._kill_if_running(generation))
 
-    def _kill_if_running(self) -> None:
-        if self.running:
+    def _kill_if_running(self, generation: int) -> None:
+        if self.running and generation == self._generation:
             self._process.kill()
 
     def _read_stdout(self) -> None:

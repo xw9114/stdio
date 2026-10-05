@@ -494,6 +494,7 @@ def test_plan_is_confirmed_before_execution_then_resumed(
     assert not card.approve_button.isEnabled(), "an approved plan must not start twice"
     assert window.history[0].status == TaskPhase.PASSED.value
     assert len(window.history) == 2
+    assert window.history[1].status == "continued", "the approved plan entry no longer waits for approval"
     assert len(window.chat_view.findChildren(QFrame, "stepCard")) >= 3
     calls = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
     run_call = next(line for line in calls if line.startswith("run "))

@@ -201,3 +201,24 @@ def _decode_launcher_env(process: QProcess) -> tuple[str, list[str]]:
     encoded_args = environment.value("DUAL_AGENT_STUDIO_ARGUMENTS")
     forwarded_args = json.loads(base64.b64decode(encoded_args).decode("utf-8"))
     return executable, forwarded_args
+
+
+def test_a_run_started_right_after_cancel_survives_the_delayed_kill(qt_app, tmp_path: Path) -> None:
+    """Regression: cancel() schedules a kill 3 s later as a fallback. A run
+    resumed within those 3 s reused the same QProcess and was killed by it
+    (Studio showed exit code 62097 with no output)."""
+    from app.core.process_manager import TaskProcessManager
+
+    sleeper = CommandSpec(sys.executable, ("-c", "import time; time.sleep(8)"), str(tmp_path))
+    manager = TaskProcessManager()
+    manager.start(sleeper)
+    assert manager._process.waitForStarted(5_000)
+    manager.cancel()
+    assert manager._process.waitForFinished(5_000)
+
+    manager.start(sleeper)
+    assert manager._process.waitForStarted(5_000)
+    run_event_loop(qt_app, 4_000)  # past the 3 s fallback
+    assert manager.running, "the new run must not be killed by the old cancel"
+    manager.cancel()
+    manager._process.waitForFinished(5_000)

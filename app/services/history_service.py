@@ -34,6 +34,12 @@ class HistoryService:
         self._save(history)
         return history
 
+    def update(self, task: AgentTask) -> list[AgentTask]:
+        """Replaces a stored entry where it is, without moving it to the top."""
+        history = [task if item.id == task.id else item for item in self.load()]
+        self._save(history)
+        return history
+
     def _save(self, history: list[AgentTask]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(f"{self.path.suffix}.tmp")

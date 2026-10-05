@@ -746,3 +746,24 @@ def test_brain_fallback_is_announced(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "改用 Codex 作为 Brain" in window.statusBar().currentMessage()
     window.current_task = None
     window.close()
+
+
+@pytest.mark.parametrize("status", ["continued", "discarded", "cancelled", "blocked", "awaiting_approval"])
+def test_history_entries_of_every_status_replay(status: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    payload = {
+        "runId": "run-1",
+        "status": "blocked",
+        "plan": {"summary": "s", "constraints": [], "tasks": [{"id": "T1", "title": "t"}]},
+        "tasks": [],
+    }
+    task = AgentTask("goal", str(tmp_path), "claude", "codex", 3, status=status, status_json=payload)
+    window._show_history_task(task)
+    cards = window.chat_view.findChildren(_ResultCard)
+    if status in {"continued", "discarded"}:
+        assert cards and cards[-1].resume_button is None, "a settled entry offers no second continuation"
+    window.close()

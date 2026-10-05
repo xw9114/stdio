@@ -75,8 +75,17 @@ class CommandBuilder:
     def build_discard_command(self, project_path: str, run_id: str) -> CommandSpec:
         return self._spec(["discard", "--cwd", project_path, "--run-id", run_id], project_path)
 
-    def build_doctor_command(self, project_path: str) -> CommandSpec:
-        return self._spec(["doctor", "--cwd", project_path], project_path)
+    def build_doctor_command(
+        self, project_path: str, brain: str | None = None, executor: str | None = None
+    ) -> CommandSpec:
+        # The agents Studio will run with, not just the config file's: runs
+        # always pass --brain/--executor, so doctor must check the same ones.
+        arguments = ["doctor", "--cwd", project_path]
+        if brain:
+            arguments += ["--brain", brain]
+        if executor:
+            arguments += ["--executor", executor]
+        return self._spec(arguments, project_path)
 
     def build_init_command(self, project_path: str, *, force: bool = False) -> CommandSpec:
         arguments = ["init", "--cwd", project_path]

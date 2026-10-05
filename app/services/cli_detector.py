@@ -25,6 +25,7 @@ class CliDetector(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._queue: deque[_CheckSpec] = deque()
+        self._orchestrator_path = ""
         self._process: CapturedProcess | None = None
         self._status = EnvironmentStatus()
 
@@ -32,12 +33,15 @@ class CliDetector(QObject):
     def running(self) -> bool:
         return self._process is not None or bool(self._queue)
 
-    def check(self, orchestrator_path: str, project_path: str) -> None:
+    def check(
+        self, orchestrator_path: str, project_path: str, brain: str | None = None, executor: str | None = None
+    ) -> None:
         if self.running:
             return
         project = Path(project_path)
         cwd = str(project if project.is_dir() else Path.cwd())
         self._status = EnvironmentStatus()
+        self._orchestrator_path = orchestrator_path
         builder = CommandBuilder(orchestrator_path)
         self._queue = deque(
             [
@@ -50,7 +54,7 @@ class CliDetector(QObject):
                     "orchestrator",
                     CommandSpec(orchestrator_path, ("--help",), cwd),
                 ),
-                _CheckSpec("doctor", builder.build_doctor_command(cwd)),
+                _CheckSpec("doctor", builder.build_doctor_command(cwd, brain, executor)),
             ]
         )
         self._run_next()
@@ -60,8 +64,11 @@ class CliDetector(QObject):
             self.finished.emit(self._status)
             return
         spec = self._queue.popleft()
-        if spec.key in {"orchestrator", "doctor"} and not Path(spec.command.program).is_file():
-            self._record(spec.key, False, f"找不到：{spec.command.program}")
+        # The configured dual-agent.cmd, not the program a check runs: the
+        # builder launches its one-line node forwarder as `node cli.ts`, and
+        # "node" is not a path, so doctor was always reported missing.
+        if spec.key in {"orchestrator", "doctor"} and not Path(self._orchestrator_path).is_file():
+            self._record(spec.key, False, f"找不到：{self._orchestrator_path}")
             self._run_next()
             return
 

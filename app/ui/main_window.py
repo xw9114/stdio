@@ -753,6 +753,8 @@ class MainWindow(QMainWindow):
         self.cli_detector.check(
             self.settings.orchestrator_path,
             self.task_panel.project_path(),
+            self.task_panel.brain(),
+            self.task_panel.executor(),
         )
 
     def _on_environment_finished(self, status: EnvironmentStatus) -> None:

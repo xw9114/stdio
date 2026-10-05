@@ -45,6 +45,12 @@ def test_builds_doctor_init_and_status_commands() -> None:
         "--cwd",
         r"E:\repo",
     )
+    assert builder.build_doctor_command(r"E:\repo", "claude", "codex").arguments[-4:] == (
+        "--brain",
+        "claude",
+        "--executor",
+        "codex",
+    )
     assert builder.build_init_command(r"E:\repo", force=True).arguments[-1] == "--force"
     assert builder.build_status_command(r"E:\repo").arguments[-1] == "--json"
 

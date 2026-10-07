@@ -817,3 +817,32 @@ def test_settings_preview_is_undone_when_the_dialog_is_cancelled(
     assert not window.canvas.has_wallpaper
     assert window.settings.wallpaper == ""
     window.close()
+
+
+def test_a_continuation_that_fails_to_start_leaves_the_plan_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.history_service import HistoryService
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(
+        data_dir,
+        orchestrator_path=str(tmp_path / "missing" / "dual-agent.cmd"),
+        check_environment_on_start=False,
+    )
+    plan = AgentTask(
+        "goal", str(tmp_path), "claude", "codex", 3,
+        status=TaskPhase.AWAITING_APPROVAL.value,
+        status_json={"status": "awaiting_approval", "runId": "run-1", "plan": {"tasks": []}},
+    )
+    HistoryService(data_dir / "history.json").add(plan)
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda *args: None))  # no welcome dialog
+    window = MainWindow()
+    window._plan_source = plan
+
+    window._approve_plan([], "")
+
+    stored = next(task for task in window.history if task.id == plan.id)
+    assert stored.status == TaskPhase.AWAITING_APPROVAL.value, "the plan can still be approved from the history"
+    assert window.history[0].status == TaskPhase.FAILED.value
+    window.close()

@@ -106,6 +106,11 @@ class _ProjectHeading(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
+def _project_key(path: str) -> str:
+    # Windows paths: case and slash direction do not matter.
+    return str(PureWindowsPath(path.strip().rstrip("\\/"))).lower()
+
+
 def _project_name(path: str) -> str:
     # Windows path parsing also accepts forward slashes.
     cleaned = path.strip().rstrip("\\/")
@@ -203,10 +208,16 @@ class HistoryPanel(QWidget):
         """Lists the tasks under one heading per project, projects ordered by
         their most recent task (the history arrives newest first)."""
         self.list_widget.clear()
+        # Keyed by the full path: two projects may share a folder name.
         groups: dict[str, list[AgentTask]] = {}
         for task in history:
-            groups.setdefault(_project_name(task.project_path), []).append(task)
-        for name, tasks in groups.items():
+            groups.setdefault(_project_key(task.project_path), []).append(task)
+        names = [_project_name(tasks[0].project_path) for tasks in groups.values()]
+        for tasks in groups.values():
+            name = _project_name(tasks[0].project_path)
+            if names.count(name) > 1:
+                parent = PureWindowsPath(tasks[0].project_path.strip().rstrip("\\/")).parent.name
+                name = f"{name} · {parent}" if parent else name
             heading = QListWidgetItem()
             heading.setData(_GROUP_ROLE, name)
             # Clickable, to fold the group, but never selected.

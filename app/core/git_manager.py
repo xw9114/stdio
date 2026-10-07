@@ -68,7 +68,7 @@ class GitManager(QObject):
         self._project_path = project_path
         self._base = base
         self._start(
-            CommandSpec("git", ("-C", project_path, "status", "--short"), project_path),
+            CommandSpec("git", ("-C", project_path, *_READABLE_PATHS, "status", "--short"), project_path),
             self._on_status,
         )
 
@@ -98,7 +98,7 @@ class GitManager(QObject):
         self._start(
             CommandSpec(
                 "git",
-                ("-C", self._project_path, "diff", "--no-ext-diff", "--no-color", self._base, "--", "."),
+                ("-C", self._project_path, *_READABLE_PATHS, "diff", "--no-ext-diff", "--no-color", self._base, "--", "."),
                 self._project_path,
             ),
             self._on_diff,
@@ -129,6 +129,11 @@ class GitManager(QObject):
         process = self._process
         self._process = None
         return process
+
+
+# Git escapes non-ASCII file names as octal ("\344\270...") by default,
+# which turned every Chinese path in the panel into noise.
+_READABLE_PATHS = ("-c", "core.quotepath=false")
 
 
 def _is_unborn_head(stderr: str) -> bool:

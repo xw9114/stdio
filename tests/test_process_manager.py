@@ -222,3 +222,19 @@ def test_a_run_started_right_after_cancel_survives_the_delayed_kill(qt_app, tmp_
     assert manager.running, "the new run must not be killed by the old cancel"
     manager.cancel()
     manager._process.waitForFinished(5_000)
+
+
+def test_a_captured_process_past_its_time_limit_is_killed_and_reported(qt_app, tmp_path: Path) -> None:
+    from app.core.process_manager import CapturedProcess
+
+    process = CapturedProcess()
+    results: list[int] = []
+    process.finished.connect(lambda code, _out, _err: (results.append(code), qt_app.quit()))
+    hang = CommandSpec(sys.executable, ("-c", "import time; time.sleep(30)"), str(tmp_path))
+    process.start(hang, timeout_ms=300)
+    run_event_loop(qt_app, 10_000)
+    assert results and process.timed_out
+
+    process.start(CommandSpec(sys.executable, ("-c", "pass"), str(tmp_path)), timeout_ms=10_000)
+    run_event_loop(qt_app, 10_000)
+    assert results[-1] == 0 and not process.timed_out

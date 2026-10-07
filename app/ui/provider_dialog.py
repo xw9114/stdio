@@ -44,6 +44,8 @@ class ProviderDialog(QDialog):
         self._service = service
         self._state = service.load()
         self._tool = "claude"
+        # Whether anything was saved, so the caller only reports real changes.
+        self.changed = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 18)
@@ -210,6 +212,7 @@ class ProviderDialog(QDialog):
     def _save(self) -> None:
         try:
             self._service.save(self._state)
+            self.changed = True
         except OSError as error:
             QMessageBox.warning(self, "保存失败", f"无法写入配置：{error}")
         self._render()

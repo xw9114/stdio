@@ -614,31 +614,33 @@ class MainWindow(QMainWindow):
         if source is None or run_id is None or self._busy():
             return
         self._plan_source = None
-        self._close_source(source, "continued")
         task = self._follow_up_task(source)
         meta = "开始执行计划" + (f" · 跳过 {', '.join(skip)}" if skip else "")
-        self._launch(
+        # The source is closed only once its continuation is running: a launch
+        # that fails must leave it open to try again from the history.
+        if self._launch(
             task,
             lambda: self.client.resume_task(task, run_id, skip=skip, note=note),
             message=note or "按计划开始执行",
             meta=meta,
             new_conversation=False,
-        )
+        ):
+            self._close_source(source, "continued")
 
     def _replan(self, note: str) -> None:
         source = self._plan_source
         if source is None or self._busy():
             return
         self._plan_source = None
-        self._close_source(source, "continued")
         task = self._follow_up_task(source, f"{source.description}\n\n补充说明：\n{note}")
-        self._launch(
+        if self._launch(
             task,
             lambda: self.client.run_task(task, plan_only=True),
             message=note,
             meta="按补充说明重新规划",
             new_conversation=False,
-        )
+        ):
+            self._close_source(source, "continued")
 
     def _discard_plan(self) -> None:
         if self._plan_source is not None:
@@ -658,15 +660,15 @@ class MainWindow(QMainWindow):
         )
         if not accepted:
             return
-        self._close_source(source, "continued")
         task = self._follow_up_task(source)
-        self._launch(
+        if self._launch(
             task,
             lambda: self.client.resume_task(task, run_id, note=note),
             message=note.strip() or "继续执行",
             meta="从中断处继续",
             new_conversation=False,
-        )
+        ):
+            self._close_source(source, "continued")
 
     def _show_outcome(self, task: AgentTask, payload: dict[str, object] | None) -> None:
         """End of a run in the chat: a plan awaiting approval gets the plan
@@ -890,7 +892,9 @@ class MainWindow(QMainWindow):
         state = "applied" if action == "apply" else "discarded"
         if task.status_json and isinstance(task.status_json.get("isolation"), dict):
             task.status_json["isolation"]["state"] = state
-            self.history = self._history_service.add(task)
+            # In place: settling an older run must not move it to the top.
+            stored = any(item.id == task.id for item in self.history)
+            self.history = (self._history_service.update if stored else self._history_service.add)(task)
             self.history_panel.set_history(self.history)
         conflicts = "conflict" in output.lower()
         outcome = (
@@ -945,6 +949,8 @@ class MainWindow(QMainWindow):
     def _show_providers(self) -> None:
         dialog = ProviderDialog(ProviderService(), self)
         dialog.exec()
+        if not dialog.changed:
+            return
         state = dialog.state
         summary = "，".join(
             f"{TOOL_LABELS[tool]}：{profile.name if (profile := state.active_profile(tool)) else '官方登录'}"

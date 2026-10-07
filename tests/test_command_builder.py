@@ -34,6 +34,7 @@ def test_build_run_command_preserves_chinese_and_space_paths(tmp_path: Path) -> 
         "codex",
         "--max-retries",
         "3",
+        "--",
         "修复登录接口，并添加测试",
     ]
 
@@ -121,13 +122,13 @@ def test_plan_only_and_resume_commands(tmp_path: Path) -> None:
     assert args[0] == "resume"
     assert args[args.index("--run-id") + 1] == "run-42"
     assert args[args.index("--skip") + 1] == "T2,T3"
-    assert args[args.index("--note") + 1] == note
+    assert f"--note={note}" in args
     assert args[args.index("--brain") + 1] == "claude"
     assert task.description not in args, "resume continues a stored run and takes no goal"
 
     bare = builder.build_resume_command(task, "run-42")
     assert "--skip" not in bare.arguments
-    assert "--note" not in bare.arguments
+    assert not any(arg.startswith("--note") for arg in bare.arguments)
 
 
 def test_single_agent_run_never_asks_for_a_plan(tmp_path: Path) -> None:
@@ -161,3 +162,14 @@ def test_run_modes_map_to_orchestrator_routes(tmp_path: Path) -> None:
             assert arguments[index : index + 2] == route_args
         else:
             assert "--route" not in arguments, "auto leaves the choice to the Brain"
+
+
+def test_list_shaped_goals_and_notes_are_never_read_as_options(tmp_path: Path) -> None:
+    # node's parseArgs refused both: "- fix X" as an unknown option, and a
+    # separate --note value starting with "-" as ambiguous.
+    builder = CommandBuilder(str(tmp_path / "missing" / "dual-agent.cmd"))
+    task = _task("- fix the login\n- add tests")
+    arguments = list(builder.build_run_command(task).arguments)
+    assert arguments[-2:] == ["--", task.description]
+    resume = builder.build_resume_command(task, "run-1", note="- keep the API")
+    assert "--note=- keep the API" in resume.arguments

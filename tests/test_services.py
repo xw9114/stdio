@@ -79,3 +79,12 @@ def test_history_update_keeps_the_entry_in_place(tmp_path: Path) -> None:
     history = service.update(first)
     assert [task.description for task in history] == ["second", "first"]
     assert history[1].status == "continued"
+
+
+def test_an_unreadable_history_is_kept_before_it_is_overwritten(tmp_path: Path) -> None:
+    path = tmp_path / "history.json"
+    path.write_text("[{broken", encoding="utf-8")
+    service = HistoryService(path)
+    assert service.load() == []
+    service.add(AgentTask("goal", str(tmp_path), "claude", "codex", 1))
+    assert (tmp_path / "history.json.corrupt").read_text(encoding="utf-8") == "[{broken"

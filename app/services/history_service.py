@@ -25,7 +25,19 @@ class HistoryService:
             return []
         except (OSError, ValueError, json.JSONDecodeError) as error:
             LOGGER.warning("Could not load history: %s", error)
+            self._keep_unreadable_copy()
             return []
+
+    def _keep_unreadable_copy(self) -> None:
+        # The next save rewrites the file from what load() returned, so an
+        # unreadable history would otherwise be replaced and lost for good.
+        backup = self.path.with_suffix(f"{self.path.suffix}.corrupt")
+        try:
+            if self.path.is_file() and not backup.exists():
+                backup.write_bytes(self.path.read_bytes())
+                LOGGER.warning("Kept the unreadable history as %s", backup)
+        except OSError as error:
+            LOGGER.warning("Could not keep the unreadable history: %s", error)
 
     def add(self, task: AgentTask) -> list[AgentTask]:
         history = [item for item in self.load() if item.id != task.id]

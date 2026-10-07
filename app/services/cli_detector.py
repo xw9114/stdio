@@ -19,6 +19,10 @@ class _CheckSpec:
     command: CommandSpec
 
 
+# A login check that waits on the network must not hold the whole check up.
+_CHECK_TIMEOUT_MS = 60_000
+
+
 class CliDetector(QObject):
     progress = Signal(str, object)
     finished = Signal(object)
@@ -91,7 +95,7 @@ class CliDetector(QObject):
         process.start_failed.connect(
             lambda message: self._on_start_failed(process, spec, message)
         )
-        process.start(spec.command)
+        process.start(spec.command, timeout_ms=_CHECK_TIMEOUT_MS)
 
     def _on_finished(
         self,
@@ -102,6 +106,10 @@ class CliDetector(QObject):
         stderr: str,
     ) -> None:
         self._release(process)
+        if process.timed_out:
+            self._record(spec.key, False, f"超时：{_CHECK_TIMEOUT_MS // 1000} 秒内没有响应")
+            self._run_next()
+            return
         combined = "\n".join(part.strip() for part in (stdout, stderr) if part.strip())
         detail = _format_detail(spec.key, combined)
         self._record(spec.key, exit_code == 0, detail or f"退出码 {exit_code}")

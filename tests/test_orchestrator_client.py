@@ -172,3 +172,17 @@ def test_cancel_task_reports_cancelled_not_the_orchestrators_own_exit_status(tmp
     assert finished, "task_finished was never emitted after cancellation"
     _exit_code, _payload, cancelled = finished[0]
     assert cancelled is True
+
+
+def test_apply_with_conflicts_counts_as_applied_but_other_failures_do_not(qt_app, tmp_path: Path) -> None:
+    script = tmp_path / "dual-agent.cmd"
+    # Exit 3 is `apply` landing the change with conflicts; `discard` with 3 is a plain failure.
+    script.write_text("@echo off\r\necho [dual-agent] Applied with conflicts to resolve\r\nexit /b 3\r\n", encoding="utf-8")
+    client = OrchestratorClient(str(script))
+    results: list[tuple[str, bool]] = []
+    client.operation_finished.connect(lambda name, ok, _out: (results.append((name, ok)), qt_app.quit()))
+    client.apply_run(str(tmp_path), "run-1")
+    run_event_loop(qt_app, 20_000)
+    client.discard_run(str(tmp_path), "run-1")
+    run_event_loop(qt_app, 20_000)
+    assert results == [("apply", True), ("discard", False)]

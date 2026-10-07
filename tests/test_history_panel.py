@@ -133,3 +133,17 @@ def test_thread_items_tell_repeated_goals_apart() -> None:
     item = _ThreadItem(task)
     assert item.detail_text.startswith("阻塞 · ")
     assert item.detail_text.endswith(" · 11 分钟 · 单 agent")
+
+
+def test_projects_sharing_a_folder_name_stay_apart(history_panel: HistoryPanel) -> None:
+    first, second, third = _task("a"), _task("b"), _task("c")
+    first.project_path, second.project_path, third.project_path = "E:/a/app", "E:/b/app", "e:/A/app/"
+    history_panel.set_history([first, second, third])
+    names = [
+        label.text()
+        for row in range(history_panel.list_widget.count())
+        if (widget := history_panel.list_widget.itemWidget(history_panel.list_widget.item(row))) is not None
+        and (label := widget.findChild(QLabel, "projectGroupName")) is not None
+    ]
+    assert names == ["app · a", "app · b"]
+    assert [item.data(Qt.ItemDataRole.UserRole) for item in history_panel.task_items()] == [first, third, second]

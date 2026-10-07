@@ -138,3 +138,17 @@ def test_refresh_against_a_base_shows_committed_checkpoints(tmp_path: Path) -> N
     run_event_loop(app, 15000)
 
     assert results and "+const speed = 2;" in results[0], results
+
+
+def test_chinese_file_names_show_as_written(qt_app, tmp_path: Path) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "中文.txt").write_text("a\n", encoding="utf-8")
+    manager = GitManager()
+    results: list[str] = []
+    manager.refreshed.connect(lambda status, _diff: (results.append(status), qt_app.quit()))
+    manager.failed.connect(lambda message: (results.append(f"failed: {message}"), qt_app.quit()))
+    manager.refresh(str(tmp_path))
+    run_event_loop(qt_app, 15_000)
+    assert results == ["?? 中文.txt"]

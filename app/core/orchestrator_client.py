@@ -21,6 +21,12 @@ from app.models.task import AgentTask
 
 LOGGER = logging.getLogger(__name__)
 
+# `status --json` only reads a state file; one that hangs must not keep a
+# finished run from being reported.
+_STATUS_TIMEOUT_MS = 30_000
+# Exit code of `dual-agent apply` when the change landed with conflicts.
+_APPLIED_WITH_CONFLICTS = 3
+
 
 class OrchestratorClient(QObject):
     log_received = Signal(str, str)
@@ -145,11 +151,14 @@ class OrchestratorClient(QObject):
     def _start_status(self, command: CommandSpec, *, final: bool) -> None:
         if self._status_process and self._status_process.running:
             if final:
-                self._status_process.finished.connect(
-                    lambda _code, _out, _err: QTimer.singleShot(
-                        0, lambda: self._start_status(command, final=True)
-                    )
-                )
+                # Once the poll in flight ends - either way: waiting on
+                # `finished` alone left the run unfinished forever when the
+                # poll failed to start instead.
+                def retry(*_args: object) -> None:
+                    QTimer.singleShot(0, lambda: self._start_status(command, final=True))
+
+                self._status_process.finished.connect(retry)
+                self._status_process.start_failed.connect(retry)
             return
 
         process = CapturedProcess(self)
@@ -162,7 +171,7 @@ class OrchestratorClient(QObject):
         process.start_failed.connect(
             lambda message: self._on_status_start_failed(process, message, final)
         )
-        process.start(command)
+        process.start(command, timeout_ms=_STATUS_TIMEOUT_MS)
 
     def _on_status_finished(
         self,
@@ -230,7 +239,11 @@ class OrchestratorClient(QObject):
             self._operation_process = None
         process.deleteLater()
         output = "\n".join(part.strip() for part in (stdout, stderr) if part.strip())
-        self.operation_finished.emit(name, exit_code == 0, output)
+        # `apply` exits 3 when it did apply, leaving conflicts to resolve; its
+        # worktree is gone by then, so treating that as a failure kept
+        # offering an apply that could only fail.
+        success = exit_code == 0 or (name == "apply" and exit_code == _APPLIED_WITH_CONFLICTS)
+        self.operation_finished.emit(name, success, output)
 
     def _on_operation_start_failed(
         self, process: CapturedProcess, name: str, message: str

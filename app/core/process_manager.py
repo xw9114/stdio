@@ -107,6 +107,11 @@ class CapturedProcess(QObject):
         self._stdout = bytearray()
         self._stderr = bytearray()
         self._reported_start_error = False
+        # Set when the process was killed for running past its time limit.
+        self.timed_out = False
+        self._deadline = QTimer(self)
+        self._deadline.setSingleShot(True)
+        self._deadline.timeout.connect(self._on_deadline)
         self._process.readyReadStandardOutput.connect(self._read_stdout)
         self._process.readyReadStandardError.connect(self._read_stderr)
         self._process.finished.connect(self._on_finished)
@@ -116,12 +121,22 @@ class CapturedProcess(QObject):
     def running(self) -> bool:
         return self._process.state() != QProcess.ProcessState.NotRunning
 
-    def start(self, command: CommandSpec) -> None:
+    def start(self, command: CommandSpec, timeout_ms: int = 0) -> None:
+        """`timeout_ms` > 0 kills a process that hangs (a CLI waiting on the
+        network or a prompt), so whoever waits for `finished` gets it."""
         self._stdout.clear()
         self._stderr.clear()
         self._reported_start_error = False
+        self.timed_out = False
         configure_process(self._process, command)
         self._process.start()
+        if timeout_ms > 0:
+            self._deadline.start(timeout_ms)
+
+    def _on_deadline(self) -> None:
+        if self.running:
+            self.timed_out = True
+            self._process.kill()
 
     def _read_stdout(self) -> None:
         self._stdout.extend(bytes(self._process.readAllStandardOutput()))
@@ -132,9 +147,11 @@ class CapturedProcess(QObject):
     def _on_error(self, error: QProcess.ProcessError) -> None:
         if error == QProcess.ProcessError.FailedToStart and not self._reported_start_error:
             self._reported_start_error = True
+            self._deadline.stop()
             self.start_failed.emit(self._process.errorString())
 
     def _on_finished(self, exit_code: int, _exit_status: QProcess.ExitStatus) -> None:
+        self._deadline.stop()
         self._read_stdout()
         self._read_stderr()
         self.finished.emit(

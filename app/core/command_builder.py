@@ -39,7 +39,9 @@ class CommandBuilder:
                 arguments.extend(["--route", task.mode])
             if plan_only:
                 arguments.append("--plan-only")
-        arguments.append(task.description)
+        # After "--": a goal written as a Markdown list ("- fix X") would
+        # otherwise be read as an unknown option and the run refused.
+        arguments.extend(["--", task.description])
         return self._spec(arguments, task.project_path)
 
     def build_resume_command(
@@ -56,7 +58,9 @@ class CommandBuilder:
         if note.strip():
             # One argv element even when multi-line: the node launch path in
             # _spec passes it through CreateProcess untouched.
-            arguments.extend(["--note", note.strip()])
+            # Joined with "=": node's parseArgs rejects a separate value
+            # that starts with "-", as a note in list form does.
+            arguments.append(f"--note={note.strip()}")
         return self._spec(arguments, task.project_path)
 
     @staticmethod

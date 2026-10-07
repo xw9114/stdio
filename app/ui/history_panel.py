@@ -116,6 +116,7 @@ class HistoryPanel(QWidget):
     new_task_requested = Signal()
     environment_requested = Signal()
     settings_requested = Signal()
+    providers_requested = Signal()
     task_selected = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -177,6 +178,14 @@ class HistoryPanel(QWidget):
         self.wallpaper_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.wallpaper_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         footer_layout.addWidget(self.wallpaper_button)
+        self.providers_button = QToolButton()
+        self.providers_button.setObjectName("iconButton")
+        self.providers_button.setIcon(icon("key", TEXT_MUTED, 18))
+        self.providers_button.setIconSize(QSize(18, 18))
+        self.providers_button.setToolTip("API 配置")
+        self.providers_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.providers_button.clicked.connect(self.providers_requested)
+        footer_layout.addWidget(self.providers_button)
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("iconButton")
         self.settings_button.setIcon(icon("settings", TEXT_MUTED, 18))

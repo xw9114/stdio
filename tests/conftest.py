@@ -26,3 +26,15 @@ def _shared_qt_application():
         return
     app = QApplication.instance() or QApplication(sys.argv)
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _isolated_api_settings(tmp_path_factory, monkeypatch):
+    """Keeps the developer's real .env and API profiles out of every test:
+    commands read .env at each launch."""
+    import app.services.provider_service as provider_service
+
+    directory = tmp_path_factory.mktemp("api")
+    monkeypatch.setattr(provider_service, "env_path", lambda: directory / ".env")
+    monkeypatch.setattr(provider_service, "providers_path", lambda: directory / "providers.json")
+    return directory

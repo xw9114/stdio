@@ -14,4 +14,7 @@ data/logs/*.log
 # Per-machine orchestrator config written by `dual-agent init`; it carries
 # executor auto-approval settings that must not be inherited by a clone.
 dual-agent.config.json
-
+# API keys from the API settings: never commit them.
+.env
+data/providers.json
+data/.env

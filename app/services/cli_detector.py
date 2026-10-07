@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, Signal
 from app.core.command_builder import CommandBuilder, CommandSpec
 from app.core.process_manager import CapturedProcess
 from app.models.environment import EnvironmentCheck, EnvironmentStatus
+from app.services.provider_service import ENV_KEYS, read_env_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,9 @@ class CliDetector(QObject):
         self._status = EnvironmentStatus()
         self._orchestrator_path = orchestrator_path
         builder = CommandBuilder(orchestrator_path)
+        # A profile from the API settings replaces the CLI's own login, so
+        # its login status says nothing about whether runs will work.
+        gateways = read_env_file()
         self._queue = deque(
             [
                 _CheckSpec("claude_cli", CommandSpec("claude", ("--version",), cwd)),
@@ -57,6 +61,11 @@ class CliDetector(QObject):
                 _CheckSpec("doctor", builder.build_doctor_command(cwd, brain, executor)),
             ]
         )
+        for key, tool in (("claude_auth", "claude"), ("codex_auth", "codex")):
+            base_url = gateways.get(ENV_KEYS[tool]["base_url"], "").strip()
+            if base_url:
+                self._queue = deque(spec for spec in self._queue if spec.key != key)
+                self._record(key, bool(gateways.get(ENV_KEYS[tool]["api_key"], "").strip()), f"API 配置：{base_url}")
         self._run_next()
 
     def _run_next(self) -> None:

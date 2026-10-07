@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.models.task import AgentTask
+from app.services.provider_service import read_env_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +14,8 @@ class CommandSpec:
     program: str
     arguments: tuple[str, ...]
     working_directory: str
+    # Extra environment variables for the process (the API settings' .env).
+    environment: tuple[tuple[str, str], ...] = ()
 
     def as_list(self) -> list[str]:
         return [self.program, *self.arguments]
@@ -97,17 +100,22 @@ class CommandBuilder:
         return self._spec(["status", "--cwd", project_path, "--json"], project_path)
 
     def _spec(self, arguments: list[str], working_directory: str) -> CommandSpec:
+        # Read at every launch, so a switch in the API settings applies to
+        # the next run without restarting Studio.
+        environment = tuple(read_env_file().items())
         script = _node_forwarded_script(Path(self.orchestrator_path))
         if script is not None:
             return CommandSpec(
                 program="node",
                 arguments=(str(script), *arguments),
                 working_directory=working_directory,
+                environment=environment,
             )
         return CommandSpec(
             program=self.orchestrator_path,
             arguments=tuple(arguments),
             working_directory=working_directory,
+            environment=environment,
         )
 
 

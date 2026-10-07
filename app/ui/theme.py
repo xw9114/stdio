@@ -358,6 +358,34 @@ QLabel#phasePill {{
     font-size: 12px;
     max-height: 22px;
 }}
+
+QLabel#dialogTitle {{ font-size: 17px; font-weight: 600; }}
+QFrame#segmentBar {{ background: {SURFACE_RAISED}; border-radius: 9px; }}
+QPushButton#segment {{
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    padding: 5px 18px;
+    color: {TEXT_MUTED};
+}}
+QPushButton#segment:hover {{ color: {TEXT}; }}
+QPushButton#segment:checked {{ background: {SURFACE}; color: {TEXT}; font-weight: 600; }}
+QFrame#profileCard {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 10px; }}
+QFrame#profileCard:hover {{ border-color: {BORDER_STRONG}; }}
+QFrame#profileCard[active="true"] {{ border: 1px solid {ACCENT}; background: #f5f9ff; }}
+QLabel#profileName {{ font-weight: 600; }}
+QLabel#profileDetail {{ color: {TEXT_MUTED}; font-size: 12px; }}
+QLabel#activePill {{
+    background: #e7f0ff;
+    color: {ACCENT_HOVER};
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QLabel#testResult {{ color: {TEXT_MUTED}; }}
+QLabel#testResult[state="ok"] {{ color: {DONE_COLOR}; }}
+QLabel#testResult[state="error"] {{ color: {DANGER}; }}
 """
 
 

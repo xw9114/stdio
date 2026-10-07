@@ -20,6 +20,8 @@ def configure_process(process: QProcess, command: CommandSpec) -> None:
     environment = QProcessEnvironment.systemEnvironment()
     environment.remove("FORCE_COLOR")
     environment.insert("NO_COLOR", "1")
+    for key, value in command.environment:
+        environment.insert(key, value)
 
     program = command.program
     if os.name == "nt":

@@ -37,3 +37,15 @@ def history_path() -> Path:
 def app_log_path() -> Path:
     return data_directory() / "app.log"
 
+
+def providers_path() -> Path:
+    return data_directory() / "providers.json"
+
+
+def env_path() -> Path:
+    """The .env the API settings write and every orchestrator run reads:
+    the project root in a checkout, the data directory when packaged (the
+    install folder may not be writable)."""
+    if getattr(sys, "frozen", False):
+        return data_directory() / ".env"
+    return application_root() / ".env"

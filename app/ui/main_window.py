@@ -42,11 +42,13 @@ from app.models.settings import AppSettings
 from app.models.task import AgentTask, utc_now_iso
 from app.services.cli_detector import CliDetector
 from app.services.history_service import HistoryService
+from app.services.provider_service import TOOLS, TOOL_LABELS, ProviderService
 from app.services.settings_service import SettingsService
 from app.ui.chat_view import ChatView
 from app.ui.git_panel import GitPanel
 from app.ui.history_panel import HistoryPanel
 from app.ui.log_panel import LogPanel
+from app.ui.provider_dialog import ProviderDialog
 from app.ui.result_panel import ResultPanel
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.status_panel import StatusPanel
@@ -245,6 +247,7 @@ class MainWindow(QMainWindow):
         self.history_panel.new_task_requested.connect(self._new_task)
         self.history_panel.environment_requested.connect(self._check_environment)
         self.history_panel.settings_requested.connect(self._show_settings)
+        self.history_panel.providers_requested.connect(self._show_providers)
         self.git_panel.refresh_requested.connect(self._refresh_git)
         self.history_panel.task_selected.connect(self._show_history_task)
         self.inspector_toggle.toggled.connect(self._set_inspector_visible)
@@ -937,6 +940,17 @@ class MainWindow(QMainWindow):
         self._apply_appearance()
         if path_changed:
             self.client.set_orchestrator_path(self.settings.orchestrator_path)
+        self._check_environment()
+
+    def _show_providers(self) -> None:
+        dialog = ProviderDialog(ProviderService(), self)
+        dialog.exec()
+        state = dialog.state
+        summary = "，".join(
+            f"{TOOL_LABELS[tool]}：{profile.name if (profile := state.active_profile(tool)) else '官方登录'}"
+            for tool in TOOLS
+        )
+        self.statusBar().showMessage(f"API 配置已更新（{summary}），下次运行生效。", 6000)
         self._check_environment()
 
     def _show_history_task(self, task: AgentTask) -> None:

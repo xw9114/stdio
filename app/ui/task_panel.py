@@ -45,6 +45,7 @@ class TaskPanel(QFrame):
         self._brain_manual = False
         self._executor_manual = False
         self._retry_manual = False
+        self._executor_model = ""
         self._parse_timer = QTimer(self)
         self._parse_timer.setSingleShot(True)
         self._parse_timer.setInterval(350)
@@ -236,8 +237,16 @@ class TaskPanel(QFrame):
         content = self.scroll_area.widget().sizeHint()
         return QSize(content.width(), content.height() + 2)
 
+    def set_executor_model(self, model: str) -> None:
+        """The model an executor-only Claude API profile routes the Executor
+        to ("" for none), shown so the summary says what will really run."""
+        self._executor_model = model
+        self._update_options_summary()
+
     def _options_summary(self) -> str:
         executor = self.executor_combo.currentText()
+        if self._executor_model and self.executor() == "claude":
+            executor = f"{executor}（{self._executor_model}）"
         if self.mode() == "single":
             return f"{executor} 单独执行"
         summary = f"{self.brain_combo.currentText()} → {executor} · 最多返工 {self.retry_spin.value()} 次"

@@ -30,6 +30,9 @@ class AgentTask:
     # A RUN_MODES key (auto / reviewed / planned / single), kept in history
     # so the workflows can be compared on real tasks.
     mode: str = "auto"
+    # The model a Claude Executor ran on through an executor-only API
+    # profile ("" when it used the official login), as of the launch.
+    executor_model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -52,6 +55,7 @@ class AgentTask:
             status_json=value.get("status_json") if isinstance(value.get("status_json"), dict) else None,
             # Entries from before modes existed ran the two-agent plan flow.
             mode=normalize_run_mode(value.get("mode", "dual")),
+            executor_model=str(value.get("executor_model") or ""),
         )
 
 

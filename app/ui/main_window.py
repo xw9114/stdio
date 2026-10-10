@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self.task_panel.apply_settings(self.settings)
+        self.task_panel.set_executor_model(executor_gateway_model("claude"))
         self.history_panel.set_workspace(self.settings.project_path)
         self._apply_appearance()
         self._set_home_layout(self.chat_view.is_empty())
@@ -557,6 +558,7 @@ class MainWindow(QMainWindow):
         plan or blocked result it continues from. Returns whether the
         process was started."""
         self.current_task = task
+        task.executor_model = executor_gateway_model(task.executor)
         self._task_finalized = False
         self._last_orchestrator_error = None
         self.log_panel.clear()
@@ -943,6 +945,7 @@ class MainWindow(QMainWindow):
         self.settings.project_path = self.task_panel.project_path()
         self._settings_service.save(self.settings)
         self.task_panel.apply_settings(self.settings)
+        self.task_panel.set_executor_model(executor_gateway_model("claude"))
         self.history_panel.set_workspace(self.settings.project_path)
         self.log_panel.auto_scroll.setChecked(self.settings.auto_scroll_logs)
         self._apply_appearance()
@@ -960,6 +963,9 @@ class MainWindow(QMainWindow):
             f"{TOOL_LABELS[tool]}：{profile.name if (profile := state.active_profile(tool)) else '官方登录'}"
             for tool in TOOLS
         )
+        if (executor := state.executor_profile()) is not None:
+            summary += f"，Executor 专用：{executor.name}"
+        self.task_panel.set_executor_model(executor_gateway_model("claude"))
         self.statusBar().showMessage(f"API 配置已更新（{summary}），下次运行生效。", 6000)
         self._check_environment()
 
@@ -1022,8 +1028,21 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def executor_gateway_model(executor: str) -> str:
+    """The model of the executor-only Claude API profile, if one is active.
+    Read at each launch, like the .env the orchestrator gets."""
+    if executor != "claude":
+        return ""
+    profile = ProviderService().load().executor_profile()
+    if profile is None:
+        return ""
+    return profile.model.strip() or profile.name
+
+
 def _task_meta(task: AgentTask) -> str:
     executor = AGENT_LABELS.get(task.executor, task.executor)
+    if task.executor_model:
+        executor = f"{executor}（{task.executor_model}）"
     if task.mode == "single":
         return f"单 agent · {executor} · 不规划、不验收"
     brain = AGENT_LABELS.get(task.brain, task.brain)

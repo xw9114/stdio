@@ -176,3 +176,11 @@ def test_mode_is_restored_from_settings(task_panel: TaskPanel) -> None:
     task_panel.apply_settings(AppSettings(run_mode="single"))
     assert task_panel.mode() == "single"
     assert not task_panel.brain_combo.isEnabled()
+
+
+def test_summary_names_the_executor_gateway_model_for_claude_only(task_panel: TaskPanel) -> None:
+    task_panel.apply_settings(AppSettings(default_executor="claude"))
+    task_panel.set_executor_model("deepseek-v4.1-flash")
+    assert "（deepseek-v4.1-flash）" in task_panel.options_button.toolTip()
+    task_panel.apply_settings(AppSettings(default_executor="codex"))
+    assert "deepseek" not in task_panel.options_button.toolTip(), "the profile only routes a Claude Executor"

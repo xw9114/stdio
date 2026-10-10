@@ -888,3 +888,23 @@ def test_a_continued_history_entry_offers_no_apply(tmp_path: Path, monkeypatch: 
     card = window.chat_view.findChildren(_ResultCard)[-1]
     assert card.apply_button is None, "the branch belongs to the entry that continued it"
     window.close()
+
+
+def test_an_executor_only_profile_is_recorded_on_the_task_and_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.provider_service import ApiProfile, ProviderService, ProviderState
+    from app.ui.main_window import _task_meta, executor_gateway_model
+
+    state = ProviderState()
+    cheap = ApiProfile("便宜模型", "http://gateway.example", "gw-key-123456", "deepseek-v4.1-flash")
+    state.profiles["claude"].append(cheap)
+    state.executor = cheap.id
+    ProviderService().save(state)
+
+    assert executor_gateway_model("claude") == "deepseek-v4.1-flash"
+    assert executor_gateway_model("codex") == "", "only a Claude Executor is routed"
+    task = AgentTask("t", str(tmp_path), "claude", "claude", 3, executor_model=executor_gateway_model("claude"))
+    assert "Claude Code CLI（deepseek-v4.1-flash）" in _task_meta(task)
+    assert AgentTask.from_dict(task.to_dict()).executor_model == "deepseek-v4.1-flash", "kept in history"
+    assert AgentTask.from_dict({"description": "old"}).executor_model == ""

@@ -304,6 +304,14 @@ class _ResultCard(QFrame):
             if button is not None:
                 button.setEnabled(False)
 
+    def retire(self, note: str) -> None:
+        """The run was taken up again by a newer card (resume), which now owns
+        its branch: applying, discarding or resuming from here would act on a
+        run that has moved on, or on a branch that is already gone."""
+        self.settle_isolation(note)
+        if self.resume_button is not None:
+            self.resume_button.setEnabled(False)
+
 
 class _PlanCard(QFrame):
     """The plan of a plan-only run, waiting for the user's go-ahead.
@@ -641,6 +649,11 @@ class ChatView(QWidget):
         for message in self._messages:
             if isinstance(message, _ResultCard) and message.task_id == task_id:
                 message.settle_isolation(outcome)
+
+    def retire_result(self, task_id: str, note: str) -> None:
+        for message in self._messages:
+            if isinstance(message, _ResultCard) and message.task_id == task_id:
+                message.retire(note)
 
     def add_plan(self, plan: dict[str, Any]) -> None:
         self._end_active("done")

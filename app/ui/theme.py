@@ -131,6 +131,7 @@ QPushButton#toolButton {{
 }}
 QPushButton#toolButton:hover {{ background: {SURFACE_RAISED}; color: {TEXT}; }}
 QPushButton#toolButton:checked {{ background: {SURFACE_RAISED}; color: {TEXT}; }}
+QPushButton#toolButton:disabled {{ background: transparent; color: {TEXT_FAINT}; }}
 QToolButton#iconButton {{ background: transparent; border: 0; border-radius: 6px; padding: 5px; }}
 QToolButton#iconButton:hover {{ background: {HOVER}; }}
 QToolButton#iconButton::menu-indicator {{ image: none; width: 0; }}

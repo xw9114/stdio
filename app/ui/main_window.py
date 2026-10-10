@@ -669,6 +669,7 @@ class MainWindow(QMainWindow):
             new_conversation=False,
         ):
             self._close_source(source, "continued")
+            self.chat_view.retire_result(source.id, "已在下方继续执行，请在最新结果中应用或丢弃。")
 
     def _show_outcome(self, task: AgentTask, payload: dict[str, object] | None) -> None:
         """End of a run in the chat: a plan awaiting approval gets the plan
@@ -685,7 +686,10 @@ class MainWindow(QMainWindow):
             task.status not in {TaskPhase.PASSED, "continued", "discarded"}
             and resumable_run_id(payload) is not None
         )
-        isolation = active_isolation(payload)
+        # A continued entry's branch belongs to the entry that took it up;
+        # its stored payload still says "active" because only that newer
+        # entry is updated when the branch is applied or discarded.
+        isolation = None if task.status == "continued" else active_isolation(payload)
         self._shown_isolation = isolation
         self.chat_view.add_result(task, payload, resumable=resumable, isolation=isolation)
 

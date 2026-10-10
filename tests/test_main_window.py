@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QFrame, QMessageBox
+from PySide6.QtWidgets import QApplication, QFrame, QInputDialog, QMessageBox
 
 import app.utils.paths as paths_module
 from app.core.task_state import StateSnapshot, TaskPhase, phase_from_status
@@ -845,4 +845,46 @@ def test_a_continuation_that_fails_to_start_leaves_the_plan_open(
     stored = next(task for task in window.history if task.id == plan.id)
     assert stored.status == TaskPhase.AWAITING_APPROVAL.value, "the plan can still be approved from the history"
     assert window.history[0].status == TaskPhase.FAILED.value
+    window.close()
+
+
+def test_resuming_retires_the_stopped_result_card(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduced in a real run: after stop → 继续执行 → apply, the stopped
+    run's card still offered apply and resume for a branch already applied."""
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("", True)))
+    window = MainWindow()
+    resumed: list[str] = []
+    monkeypatch.setattr(window.client, "resume_task", lambda task, run_id, **k: resumed.append(run_id))
+    stopped = _isolated_task(tmp_path)
+    stopped.status = TaskPhase.CANCELLED.value
+    stopped.status_json.update({"status": "executing", "plan": {"tasks": []}})
+    window._show_outcome(stopped, stopped.status_json)
+    card = window.chat_view.findChildren(_ResultCard)[-1]
+    assert card.apply_button.isEnabled() and card.resume_button.isEnabled()
+
+    window._resume_run(stopped)
+
+    assert resumed == ["run-9"]
+    assert not card.apply_button.isEnabled()
+    assert not card.discard_button.isEnabled()
+    assert not card.resume_button.isEnabled()
+    window.current_task = None
+    window.close()
+
+
+def test_a_continued_history_entry_offers_no_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    task = _isolated_task(tmp_path)
+    task.status = "continued"
+    window._show_history_task(task)
+    card = window.chat_view.findChildren(_ResultCard)[-1]
+    assert card.apply_button is None, "the branch belongs to the entry that continued it"
     window.close()

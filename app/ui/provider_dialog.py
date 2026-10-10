@@ -114,6 +114,14 @@ class ProviderDialog(QDialog):
         cards.setContentsMargins(0, 4, 4, 4)
         cards.setSpacing(8)
         active = self._state.active[self._tool]
+        if self._tool == "claude":
+            hint = QLabel(
+                "「启用」让 Brain 和 Executor 都走这个 API；「仅 Executor」只让 Executor 走它，"
+                "Brain 继续用上面选中的，适合用便宜的模型做修改、Claude 负责规划和验收。"
+            )
+            hint.setObjectName("muted")
+            hint.setWordWrap(True)
+            cards.addWidget(hint)
         cards.addWidget(self._card(None, active == ""))
         for profile in self._state.profiles[self._tool]:
             cards.addWidget(self._card(profile, profile.id == active))
@@ -160,6 +168,22 @@ class ProviderDialog(QDialog):
             use.setObjectName("toolButton")
             use.clicked.connect(lambda _checked=False: self._activate(profile))
             row.addWidget(use)
+        if profile is not None and self._tool == "claude":
+            if profile.id == self._state.executor:
+                badge = QLabel("Executor 使用中")
+                badge.setObjectName("activePill")
+                row.addWidget(badge)
+                stop = QPushButton("停用")
+                stop.setObjectName("toolButton")
+                stop.setToolTip("Executor 改回跟随上面「使用中」的配置")
+                stop.clicked.connect(lambda _checked=False: self._use_for_executor(None))
+                row.addWidget(stop)
+            else:
+                executor = QPushButton("仅 Executor")
+                executor.setObjectName("toolButton")
+                executor.setToolTip("只让 Executor 走这个 API，Brain 不受影响")
+                executor.clicked.connect(lambda _checked=False: self._use_for_executor(profile))
+                row.addWidget(executor)
         if profile is not None:
             for icon_name, tip, handler in (
                 ("edit", "编辑", lambda _checked=False: self._edit_profile(profile)),
@@ -176,6 +200,21 @@ class ProviderDialog(QDialog):
 
     def _activate(self, profile: ApiProfile | None) -> None:
         self._state.active[self._tool] = "" if profile is None else profile.id
+        self._save()
+
+    def _use_for_executor(self, profile: ApiProfile | None) -> None:
+        if profile is not None and not profile.model.strip():
+            # Without one the Executor asks the gateway for Claude's default
+            # model, which a third-party gateway usually does not have.
+            answer = QMessageBox.question(
+                self,
+                "没有填写模型",
+                f"“{profile.name}”没有填写模型。第三方 API 通常不认识 Claude 的默认模型名，"
+                "Executor 可能会调用失败。\n\n仍然用于 Executor 吗？（可以先编辑配置填上模型）",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._state.executor = "" if profile is None else profile.id
         self._save()
 
     def _add_profile(self) -> None:
@@ -207,6 +246,8 @@ class ProviderDialog(QDialog):
         self._state.profiles[self._tool] = [p for p in self._state.profiles[self._tool] if p.id != profile.id]
         if self._state.active[self._tool] == profile.id:
             self._state.active[self._tool] = ""
+        if self._state.executor == profile.id:
+            self._state.executor = ""
         self._save()
 
     def _save(self) -> None:

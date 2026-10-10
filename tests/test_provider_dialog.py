@@ -82,3 +82,32 @@ def test_closing_the_editor_mid_test_aborts_the_request_safely() -> None:
         assert editor._reply is None
         del editor
         QApplication.processEvents()
+
+
+def test_a_claude_profile_can_serve_the_executor_alone(tmp_path: Path, monkeypatch) -> None:
+    service = ProviderService(tmp_path / "providers.json", tmp_path / ".env")
+    dialog = ProviderDialog(service)
+    cheap = ApiProfile("便宜模型", "http://gateway.example", "gw-key-123456", "deepseek-v4.1-flash")
+    dialog.state.profiles["claude"].append(cheap)
+    dialog._render()
+
+    [executor] = [b for b in dialog._scroll.widget().findChildren(QPushButton) if b.text() == "仅 Executor"]
+    executor.click()
+    env = read_env_file(service.env_file)
+    assert env["DUAL_AGENT_CLAUDE_EXECUTOR_MODEL"] == "deepseek-v4.1-flash"
+    assert "ANTHROPIC_BASE_URL" not in env, "the Brain is not routed"
+    assert "Executor 使用中" in _texts(dialog, QLabel)
+
+    [stop] = [b for b in dialog._scroll.widget().findChildren(QPushButton) if b.text() == "停用"]
+    stop.click()
+    assert service.load().executor == "" and read_env_file(service.env_file) == {}
+
+
+def test_an_executor_profile_without_a_model_asks_first(tmp_path: Path, monkeypatch) -> None:
+    service = ProviderService(tmp_path / "providers.json", tmp_path / ".env")
+    dialog = ProviderDialog(service)
+    bare = ApiProfile("没填模型", "http://gateway.example", "gw-key-123456")
+    dialog.state.profiles["claude"].append(bare)
+    monkeypatch.setattr(provider_dialog.QMessageBox, "question", lambda *args: provider_dialog.QMessageBox.StandardButton.No)
+    dialog._use_for_executor(bare)
+    assert service.load().executor == ""

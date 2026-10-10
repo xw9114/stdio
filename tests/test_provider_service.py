@@ -84,3 +84,26 @@ def test_orchestrator_commands_carry_the_env_file_at_launch(tmp_path: Path, _iso
     assert dict(builder.build_doctor_command(str(tmp_path)).environment) == {
         "DUAL_AGENT_CODEX_BASE_URL": "https://relay.example"
     }
+
+
+def test_an_executor_only_profile_gets_its_own_variables(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    state = ProviderState()
+    cheap = ApiProfile("便宜模型", "http://gateway.example", "gw-key-123456", "deepseek-v4.1-flash")
+    state.profiles["claude"].append(cheap)
+    state.executor = cheap.id
+    service.save(state)
+
+    loaded = service.load()
+    assert loaded.executor == cheap.id and loaded.active["claude"] == "", "the Brain keeps the official login"
+    assert read_env_file(service.env_file) == {
+        "DUAL_AGENT_CLAUDE_EXECUTOR_BASE_URL": "http://gateway.example",
+        "DUAL_AGENT_CLAUDE_EXECUTOR_API_KEY": "gw-key-123456",
+        "DUAL_AGENT_CLAUDE_EXECUTOR_MODEL": "deepseek-v4.1-flash",
+    }
+
+    # A deleted profile's id no longer counts.
+    raw = json.loads(service.path.read_text(encoding="utf-8"))
+    raw["profiles"]["claude"] = []
+    service.path.write_text(json.dumps(raw), encoding="utf-8")
+    assert service.load().executor == ""

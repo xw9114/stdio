@@ -29,7 +29,16 @@ ENV_KEYS: dict[str, dict[str, str]] = {
         "model": "DUAL_AGENT_CODEX_MODEL",
     },
 }
-MANAGED_KEYS = {key for fields in ENV_KEYS.values() for key in fields.values()}
+# A Claude profile used by the Executor alone: ANTHROPIC_BASE_URL reaches
+# every Claude process, the Brain included, and a weaker model planning too
+# missed a bug Claude's plan always caught. The orchestrator gives these to
+# the Claude Executor's process only.
+EXECUTOR_ENV_KEYS = {
+    "base_url": "DUAL_AGENT_CLAUDE_EXECUTOR_BASE_URL",
+    "api_key": "DUAL_AGENT_CLAUDE_EXECUTOR_API_KEY",
+    "model": "DUAL_AGENT_CLAUDE_EXECUTOR_MODEL",
+}
+MANAGED_KEYS = {key for fields in (*ENV_KEYS.values(), EXECUTOR_ENV_KEYS) for key in fields.values()}
 _BLOCK_START = "# --- API 配置（由 Dual Agent Studio 写入，请在应用内修改） ---"
 _BLOCK_END = "# --- API 配置结束 ---"
 
@@ -54,9 +63,14 @@ class ProviderState:
     profiles: dict[str, list[ApiProfile]] = field(default_factory=lambda: {tool: [] for tool in TOOLS})
     # Profile id per tool; "" means the CLI's own (official) login.
     active: dict[str, str] = field(default_factory=lambda: {tool: "" for tool in TOOLS})
+    # Claude profile id for the Executor alone; "" when it follows `active`.
+    executor: str = ""
 
     def active_profile(self, tool: str) -> ApiProfile | None:
         return next((p for p in self.profiles.get(tool, []) if p.id == self.active.get(tool)), None)
+
+    def executor_profile(self) -> ApiProfile | None:
+        return next((p for p in self.profiles["claude"] if p.id == self.executor), None)
 
 
 class ProviderService:
@@ -85,6 +99,8 @@ class ProviderService:
                     )
             active = raw.get("active", {}).get(tool, "") if isinstance(raw, dict) else ""
             state.active[tool] = active if any(p.id == active for p in state.profiles[tool]) else ""
+        executor = raw.get("executor", "") if isinstance(raw, dict) else ""
+        state.executor = executor if any(p.id == executor for p in state.profiles["claude"]) else ""
         return state
 
     def save(self, state: ProviderState) -> None:
@@ -93,6 +109,7 @@ class ProviderService:
         data = {
             "profiles": {tool: [asdict(p) for p in state.profiles[tool]] for tool in TOOLS},
             "active": dict(state.active),
+            "executor": state.executor,
         }
         temporary = self.path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -130,6 +147,13 @@ class ProviderService:
             block.append(f"{keys['api_key']}={_quote(profile.api_key.strip())}")
             if profile.model.strip():
                 block.append(f"{keys['model']}={_quote(profile.model.strip())}")
+        executor = state.executor_profile()
+        if executor is not None:
+            block.append(f"# Claude Executor: {executor.name}")
+            block.append(f"{EXECUTOR_ENV_KEYS['base_url']}={_quote(executor.base_url.strip())}")
+            block.append(f"{EXECUTOR_ENV_KEYS['api_key']}={_quote(executor.api_key.strip())}")
+            if executor.model.strip():
+                block.append(f"{EXECUTOR_ENV_KEYS['model']}={_quote(executor.model.strip())}")
         while kept and not kept[-1].strip():
             kept.pop()
         text = "\n".join(kept)

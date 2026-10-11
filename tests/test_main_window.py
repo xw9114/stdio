@@ -908,3 +908,131 @@ def test_an_executor_only_profile_is_recorded_on_the_task_and_shown(
     assert "Claude Code CLI（deepseek-v4.1-flash）" in _task_meta(task)
     assert AgentTask.from_dict(task.to_dict()).executor_model == "deepseek-v4.1-flash", "kept in history"
     assert AgentTask.from_dict({"description": "old"}).executor_model == ""
+
+
+def test_a_finished_task_notifies_and_lets_the_computer_sleep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quiet_desktop: list
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    window._on_task_started()
+    assert ("keep_awake", True) in _quiet_desktop
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3, started_at="2026-10-11T00:00:00+00:00")
+    window._on_task_finished(0, {"status": "complete", "runId": "r1"}, False)
+    assert ("keep_awake", False) in _quiet_desktop
+    assert any(call[0] == "notify" and call[1] == "任务完成" for call in _quiet_desktop)
+    window.close()
+
+
+def test_notifications_and_keep_awake_can_be_turned_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quiet_desktop: list
+) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False, notify_on_finish=False, keep_awake=False)
+    window = MainWindow()
+    assert window.settings.notify_on_finish is False and window.settings.keep_awake is False
+    window._on_task_started()
+    window.current_task = AgentTask("t", str(tmp_path), "claude", "codex", 3, started_at="2026-10-11T00:00:00+00:00")
+    window._on_task_finished(0, {"status": "complete", "runId": "r1"}, False)
+    assert ("keep_awake", True) not in _quiet_desktop
+    assert not any(call[0] == "notify" for call in _quiet_desktop)
+    window.close()
+
+
+def test_shortcuts_cover_the_common_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    keys = {shortcut.key().toString() for shortcut in window._shortcuts}
+    assert {"Ctrl+N", "Ctrl+O", "Ctrl+F", "Ctrl+B", "Ctrl+J", "Ctrl+,", "Esc", "Ctrl+/"} <= keys
+    window.show()
+    by_key = {shortcut.key().toString(): shortcut for shortcut in window._shortcuts}
+    by_key["Ctrl+B"].activated.emit()
+    assert not window.history_panel.isVisible()
+    by_key["Ctrl+F"].activated.emit()
+    assert window.history_panel.isVisible(), "searching brings the sidebar back"
+    by_key["Ctrl+J"].activated.emit()
+    assert window.inspector_toggle.isChecked()
+    window.close()
+
+
+def test_history_menu_reuses_and_deletes_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    old = AgentTask("修复登录问题", str(tmp_path), "claude", "codex", 3, status="passed")
+    window.history = window._history_service.add(old)
+    window.history_panel.set_history(window.history)
+
+    window._reuse_task(old)
+    assert window.task_panel.description() == "修复登录问题"
+    assert window.task_panel.project_path() == str(tmp_path)
+
+    window._show_history_task(old)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    window._delete_history_task(old)
+    assert window._history_service.load() == []
+    assert window.history_panel.task_items() == []
+    assert window.chat_view.is_empty(), "the deleted entry's conversation leaves the screen"
+    window.close()
+
+
+def test_result_card_opens_the_worktree_until_the_run_is_settled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    opened: list[str] = []
+    monkeypatch.setattr(window, "_open_folder", lambda path: opened.append(path))
+    window.chat_view.open_folder_requested.disconnect()
+    window.chat_view.open_folder_requested.connect(window._open_folder)
+    task = _isolated_task(tmp_path)
+    window._show_outcome(task, task.status_json)
+    card = window.chat_view.findChildren(_ResultCard)[-1]
+    card.folder_button.click()
+    window.chat_view.settle_isolation(task.id, "改动已应用到你的工作区。")
+    card.folder_button.click()
+    assert opened == [str(tmp_path / "worktree"), str(tmp_path)]
+    window.close()
+
+
+def test_settings_saved_mid_run_keep_the_orchestrator_path_until_it_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings button stays enabled during a run; changing the path then
+    raised RuntimeError from set_orchestrator_path."""
+    from app.ui import main_window as main_window_module
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False, orchestrator_path=str(tmp_path / "old.cmd"))
+    window = MainWindow()
+    monkeypatch.setattr(type(window.client), "running", property(lambda self: True))
+
+    class FakeDialog:
+        def __init__(self, settings, *args, **kwargs):
+            from dataclasses import replace
+
+            self._settings = replace(settings)  # as the real dialog does
+
+        def exec(self):
+            return True
+
+        def settings(self):
+            self._settings.orchestrator_path = str(tmp_path / "new.cmd")
+            return self._settings
+
+    monkeypatch.setattr(main_window_module, "SettingsDialog", FakeDialog)
+    monkeypatch.setattr(window, "_check_environment", lambda: None)
+    chosen: list[str] = []
+    monkeypatch.setattr(main_window_module.QFileDialog, "getExistingDirectory", staticmethod(lambda *a: chosen.append("asked") or ""))
+
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+    window._show_settings()  # must not raise
+    assert window.settings.orchestrator_path == str(tmp_path / "old.cmd"), "kept until the run ends"
+    window._choose_project()
+    assert chosen == [], "Ctrl+O does not change the project mid-run"
+    window.close()

@@ -218,6 +218,15 @@ QPushButton#navButton {{
 QPushButton#navButton:hover {{ background: rgba(0, 0, 0, 0.045); }}
 QPushButton#navButton[active="true"] {{ background: rgba(0, 0, 0, 0.06); }}
 QLabel#historyHeading {{ color: {TEXT_FAINT}; font-size: 13px; }}
+QLineEdit#historySearch {{
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid {BORDER};
+    border-radius: 7px;
+    padding: 4px 8px;
+    margin: 0 4px 0 6px;
+    font-size: 13px;
+}}
+QLineEdit#historySearch:focus {{ background: {SURFACE}; border-color: {ACCENT}; }}
 QListWidget#threadList {{ background: transparent; border: 0; padding: 0; outline: 0; }}
 QListWidget#threadList::item {{ border-radius: 8px; padding: 0; margin: 0; }}
 QListWidget#threadList::item:hover {{ background: rgba(0, 0, 0, 0.04); }}

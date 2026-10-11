@@ -28,6 +28,11 @@ class AppSettings:
     # Percent of extra light veil over the wallpaper, on top of what the
     # image needs for legible text.
     wallpaper_veil: int = 20
+    # A system notification when a task ends while Studio is not in front:
+    # runs take minutes and the user switches away.
+    notify_on_finish: bool = True
+    # Windows sleeping mid-run stops the agents; held only while one runs.
+    keep_awake: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,6 +63,8 @@ class AppSettings:
             wallpaper=_string(value.get("wallpaper"), defaults.wallpaper),
             wallpaper_blur=_bounded_int(value.get("wallpaper_blur"), defaults.wallpaper_blur, 0, 3),
             wallpaper_veil=_bounded_int(value.get("wallpaper_veil"), defaults.wallpaper_veil, 0, 90),
+            notify_on_finish=_boolean(value.get("notify_on_finish"), defaults.notify_on_finish),
+            keep_awake=_boolean(value.get("keep_awake"), defaults.keep_awake),
         )
 
 

@@ -38,3 +38,18 @@ def _isolated_api_settings(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(provider_service, "env_path", lambda: directory / ".env")
     monkeypatch.setattr(provider_service, "providers_path", lambda: directory / "providers.json")
     return directory
+
+
+@pytest.fixture(autouse=True)
+def _quiet_desktop(monkeypatch):
+    """No real toasts, taskbar flashes or sleep-setting changes from tests;
+    the calls are recorded for the tests that check them."""
+    try:
+        import app.ui.desktop as desktop
+    except ImportError:
+        yield None
+        return
+    calls: list[tuple] = []
+    monkeypatch.setattr(desktop, "keep_awake", lambda on: calls.append(("keep_awake", on)))
+    monkeypatch.setattr(desktop.Notifier, "notify", lambda self, title, message: calls.append(("notify", title, message)) or True)
+    yield calls

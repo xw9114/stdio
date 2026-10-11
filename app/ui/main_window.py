@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QResizeEvent
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -44,6 +44,7 @@ from app.services.cli_detector import CliDetector
 from app.services.history_service import HistoryService
 from app.services.provider_service import TOOLS, TOOL_LABELS, ProviderService
 from app.services.settings_service import SettingsService
+from app.ui import desktop
 from app.ui.chat_view import ChatView
 from app.ui.git_panel import GitPanel
 from app.ui.history_panel import HistoryPanel
@@ -112,6 +113,9 @@ class MainWindow(QMainWindow):
         self._shown_isolation: dict[str, str] | None = None
         # The task and action ("apply"/"discard") of an operation in flight.
         self._settling: tuple[AgentTask, str] | None = None
+        # The task whose conversation the chat shows, so deleting its
+        # history entry also clears the screen.
+        self._shown_task_id: str | None = None
 
         self.client = OrchestratorClient(self.settings.orchestrator_path, self)
         self.git_manager = GitManager(self)
@@ -119,6 +123,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._notifier = desktop.Notifier(self)
+        self._install_shortcuts()
         self.task_panel.apply_settings(self.settings)
         self.task_panel.set_executor_model(executor_gateway_model("claude"))
         self.history_panel.set_workspace(self.settings.project_path)
@@ -251,6 +257,11 @@ class MainWindow(QMainWindow):
         self.history_panel.providers_requested.connect(self._show_providers)
         self.git_panel.refresh_requested.connect(self._refresh_git)
         self.history_panel.task_selected.connect(self._show_history_task)
+        self.history_panel.task_reuse_requested.connect(self._reuse_task)
+        self.history_panel.task_delete_requested.connect(self._delete_history_task)
+        self.history_panel.folder_requested.connect(self._open_folder)
+        self.chat_view.open_folder_requested.connect(self._open_folder)
+        self.chat_view.open_editor_requested.connect(self._open_in_editor)
         self.inspector_toggle.toggled.connect(self._set_inspector_visible)
         self.chat_view.show_diff_requested.connect(self._show_diff)
         self.chat_view.resume_requested.connect(self._resume_run)
@@ -398,6 +409,9 @@ class MainWindow(QMainWindow):
             self._check_environment()
 
     def _choose_project(self) -> None:
+        # Its button is disabled during a run; Ctrl+O reaches here anyway.
+        if self._busy():
+            return
         selected = QFileDialog.getExistingDirectory(
             self,
             "选择 Git 项目",
@@ -558,6 +572,7 @@ class MainWindow(QMainWindow):
         plan or blocked result it continues from. Returns whether the
         process was started."""
         self.current_task = task
+        self._shown_task_id = task.id
         task.executor_model = executor_gateway_model(task.executor)
         self._task_finalized = False
         self._last_orchestrator_error = None
@@ -710,6 +725,8 @@ class MainWindow(QMainWindow):
             self.client.cancel_task()
 
     def _on_task_started(self) -> None:
+        if self.settings.keep_awake:
+            desktop.keep_awake(True)
         self._notify("任务正在运行")
         self._append_log("System", "Orchestrator 已启动。")
 
@@ -753,6 +770,9 @@ class MainWindow(QMainWindow):
         self.history_panel.set_history(self.history)
         self.task_panel.set_running(False)
         self._notify(task.result_summary)
+        desktop.keep_awake(False)
+        if self.settings.notify_on_finish:
+            self._notifier.notify(_notification_title(phase), task.result_summary)
         if self.tabs.isVisible():
             self.tabs.setCurrentWidget(self.result_panel)
         self._refresh_git()
@@ -941,6 +961,14 @@ class MainWindow(QMainWindow):
             return
         updated = dialog.settings()
         path_changed = updated.orchestrator_path != self.settings.orchestrator_path
+        if path_changed and self.client.running:
+            # The settings button stays usable during a run, and switching
+            # the orchestrator under a running task raised RuntimeError.
+            updated.orchestrator_path = self.settings.orchestrator_path
+            path_changed = False
+            QMessageBox.information(
+                self, "稍后再改路径", "任务正在运行，Orchestrator 路径没有修改。\n其他设置已保存，任务结束后再改路径即可。"
+            )
         self.settings = updated
         self.settings.project_path = self.task_panel.project_path()
         self._settings_service.save(self.settings)
@@ -973,6 +1001,7 @@ class MainWindow(QMainWindow):
         if self.client.running:
             self.history_panel.clear_selection()
             return
+        self._shown_task_id = task.id
         self.chat_view.clear()
         self.chat_view.add_user_message(task.description, _task_meta(task))
         self._set_thread_title(task.description)
@@ -997,6 +1026,82 @@ class MainWindow(QMainWindow):
                     self._feed_chat(*parsed)
         self.phase_pill.set_full_text(task.result_summary or "历史任务")
         self._show_outcome(task, task.status_json)
+
+    def _install_shortcuts(self) -> None:
+        """The keys Codex and Claude's desktop apps share for the same jobs.
+        Window-wide; dialogs have their own focus, so Esc there still closes
+        the dialog."""
+        bindings = [
+            ("Ctrl+N", "新任务", self._new_task),
+            ("Ctrl+O", "选择项目文件夹", self._choose_project),
+            ("Ctrl+F", "搜索历史任务", self._focus_history_search),
+            ("Ctrl+B", "显示 / 隐藏侧栏", self._toggle_sidebar),
+            ("Ctrl+J", "显示 / 隐藏详情面板", self.inspector_toggle.toggle),
+            ("Ctrl+,", "设置", self._show_settings),
+            ("Esc", "停止正在运行的任务", self._stop_task),
+            ("Ctrl+/", "快捷键一览", self._show_shortcuts),
+        ]
+        self.shortcut_help = [(keys, label) for keys, label, _handler in bindings] + [
+            ("Enter", "发送任务"),
+            ("Shift+Enter", "换行"),
+            ("↑", "输入框为空时，找回上一条任务描述"),
+        ]
+        self._shortcuts = []
+        for keys, _label, handler in bindings:
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(handler)
+            self._shortcuts.append(shortcut)
+
+    def _show_shortcuts(self) -> None:
+        rows = "".join(
+            f"<tr><td style='padding:3px 18px 3px 0'><b>{keys}</b></td><td>{label}</td></tr>"
+            for keys, label in self.shortcut_help
+        )
+        QMessageBox.information(self, "快捷键", f"<table>{rows}</table>")
+
+    def _focus_history_search(self) -> None:
+        self.history_panel.show()
+        self.history_panel.focus_search()
+
+    def _toggle_sidebar(self) -> None:
+        self.history_panel.setVisible(not self.history_panel.isVisible())
+
+    def _reuse_task(self, task: AgentTask) -> None:
+        """A history entry as the start of a new task: its project and
+        description in the composer, ready to edit and send."""
+        if self.client.running:
+            QMessageBox.information(self, "任务进行中", "请等当前任务结束后再新建。")
+            return
+        self._new_task()
+        if task.project_path and Path(task.project_path).is_dir():
+            self.task_panel.set_project_path(task.project_path)
+        self.task_panel.set_description(task.description)
+
+    def _delete_history_task(self, task: AgentTask) -> None:
+        answer = QMessageBox.question(
+            self,
+            "删除记录",
+            f"删除这条历史记录？\n\n{task.description[:120]}\n\n只删除 Studio 里的记录，不会改动项目文件或运行分支。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.history = self._history_service.remove(task.id)
+        self.history_panel.set_history(self.history)
+        if self._plan_source is not None and self._plan_source.id == task.id:
+            self._plan_source = None
+        if self._shown_task_id == task.id and not self.client.running:
+            self._new_task()
+
+    def _open_folder(self, path: str) -> None:
+        if not desktop.open_folder(path):
+            QMessageBox.warning(self, "无法打开", f"文件夹不存在或无法打开：\n{path}")
+
+    def _open_in_editor(self, path: str) -> None:
+        if not desktop.open_in_editor(path):
+            QMessageBox.warning(self, "无法打开", f"没能用 VS Code 打开：\n{path}")
 
     def _valid_project_or_warn(self) -> str | None:
         project = self.task_panel.project_path()
@@ -1025,7 +1130,16 @@ class MainWindow(QMainWindow):
         self.settings.auto_scroll_logs = self.log_panel.auto_scroll.isChecked()
         self._settings_service.save(self.settings)
         self._close_log()
+        desktop.keep_awake(False)
         event.accept()
+
+
+def _notification_title(phase: TaskPhase) -> str:
+    return {
+        TaskPhase.PASSED: "任务完成",
+        TaskPhase.AWAITING_APPROVAL: "计划已生成，等待确认",
+        TaskPhase.CANCELLED: "任务已取消",
+    }.get(phase, "任务未完成")
 
 
 def executor_gateway_model(executor: str) -> str:

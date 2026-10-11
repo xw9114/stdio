@@ -147,3 +147,35 @@ def test_projects_sharing_a_folder_name_stay_apart(history_panel: HistoryPanel) 
     ]
     assert names == ["app · a", "app · b"]
     assert [item.data(Qt.ItemDataRole.UserRole) for item in history_panel.task_items()] == [first, third, second]
+
+
+def test_search_filters_tasks_and_hides_empty_projects(history_panel: HistoryPanel) -> None:
+    login, tests_task, other = _task("修复登录问题"), _task("补充测试"), _task("做番茄钟网页")
+    other.project_path = "E:/work/pomodoro"
+    history_panel.set_history([login, tests_task, other])
+    visible = lambda: [  # noqa: E731
+        item.data(Qt.ItemDataRole.UserRole).description for item in history_panel.task_items() if not item.isHidden()
+    ]
+
+    history_panel.search_edit.setText("登录")
+    assert visible() == ["修复登录问题"]
+    assert history_panel.list_widget.item(3).isHidden(), "the pomodoro project has no match"
+
+    history_panel.search_edit.setText("POMODORO")
+    assert visible() == ["做番茄钟网页"], "project paths match too, in any case"
+
+    history_panel.set_history([login, tests_task, other])
+    assert visible() == ["做番茄钟网页"], "a refreshed list keeps the filter"
+    history_panel.search_edit.clear()
+    assert len(visible()) == 3
+
+
+def test_history_service_removes_one_entry(tmp_path) -> None:
+    from app.services.history_service import HistoryService
+
+    service = HistoryService(tmp_path / "history.json")
+    keep, drop = _task("keep"), _task("drop")
+    service.add(keep)
+    service.add(drop)
+    assert [t.description for t in service.remove(drop.id)] == ["keep"]
+    assert [t.description for t in service.load()] == ["keep"]

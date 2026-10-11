@@ -52,6 +52,11 @@ class HistoryService:
         self._save(history)
         return history
 
+    def remove(self, task_id: str) -> list[AgentTask]:
+        history = [item for item in self.load() if item.id != task_id]
+        self._save(history)
+        return history
+
     def _save(self, history: list[AgentTask]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(f"{self.path.suffix}.tmp")

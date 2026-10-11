@@ -3,14 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import PureWindowsPath
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtGui import QGuiApplication, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -123,6 +125,10 @@ class HistoryPanel(QWidget):
     settings_requested = Signal()
     providers_requested = Signal()
     task_selected = Signal(object)
+    # Context menu actions on a task row.
+    task_reuse_requested = Signal(object)
+    task_delete_requested = Signal(object)
+    folder_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -142,6 +148,7 @@ class HistoryPanel(QWidget):
         layout.addWidget(title)
 
         self.new_task_button = _nav_button("new", "新任务")
+        self.new_task_button.setToolTip("新任务（Ctrl+N）")
         self.new_task_button.clicked.connect(self.new_task_requested)
         layout.addWidget(self.new_task_button)
 
@@ -154,6 +161,13 @@ class HistoryPanel(QWidget):
         heading.setObjectName("historyHeading")
         heading.setContentsMargins(10, 0, 0, 4)
         layout.addWidget(heading)
+        self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("historySearch")
+        self.search_edit.setPlaceholderText("搜索任务或项目（Ctrl+F）")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._apply_filter)
+        layout.addWidget(self.search_edit)
+        layout.addSpacing(4)
 
         self.list_widget = QListWidget()
         self.list_widget.setObjectName("threadList")
@@ -161,6 +175,8 @@ class HistoryPanel(QWidget):
         self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_widget.currentItemChanged.connect(self._on_selected)
         self.list_widget.itemClicked.connect(self._on_clicked)
+        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_menu)
         layout.addWidget(self.list_widget, 1)
 
         footer = QWidget()
@@ -195,7 +211,7 @@ class HistoryPanel(QWidget):
         self.settings_button.setObjectName("iconButton")
         self.settings_button.setIcon(icon("settings", TEXT_MUTED, 18))
         self.settings_button.setIconSize(QSize(18, 18))
-        self.settings_button.setToolTip("设置")
+        self.settings_button.setToolTip("设置（Ctrl+,）")
         self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_button.clicked.connect(self.settings_requested)
         footer_layout.addWidget(self.settings_button)
@@ -235,6 +251,47 @@ class HistoryPanel(QWidget):
                 item.setSizeHint(QSize(0, 32))
                 self.list_widget.addItem(item)
                 self.list_widget.setItemWidget(item, widget)
+        self._apply_filter(self.search_edit.text())
+
+    def focus_search(self) -> None:
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
+
+    def _apply_filter(self, text: str) -> None:
+        """Shows the tasks whose description or project contains `text`
+        (any case), and the headings of projects that still have one."""
+        needle = text.strip().lower()
+        heading: QListWidgetItem | None = None
+        heading_visible = False
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            if item.data(_GROUP_ROLE) is not None:
+                if heading is not None:
+                    heading.setHidden(not heading_visible)
+                heading, heading_visible = item, False
+                continue
+            task = item.data(Qt.ItemDataRole.UserRole)
+            match = not needle or (
+                isinstance(task, AgentTask)
+                and (needle in task.description.lower() or needle in task.project_path.lower())
+            )
+            item.setHidden(not match)
+            heading_visible = heading_visible or match
+        if heading is not None:
+            heading.setHidden(not heading_visible)
+
+    def _show_menu(self, position: QPoint) -> None:
+        item = self.list_widget.itemAt(position)
+        task = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(task, AgentTask):
+            return
+        menu = QMenu(self)
+        menu.addAction("用这个任务新建", lambda: self.task_reuse_requested.emit(task))
+        menu.addAction("复制任务描述", lambda: QGuiApplication.clipboard().setText(task.description))
+        menu.addAction("打开项目文件夹", lambda: self.folder_requested.emit(task.project_path))
+        menu.addSeparator()
+        menu.addAction("删除记录", lambda: self.task_delete_requested.emit(task))
+        menu.exec(self.list_widget.viewport().mapToGlobal(position))
 
     def set_workspace(self, path: str) -> None:
         self.workspace_label.setText(_project_name(path) if path.strip() else "未选择项目")

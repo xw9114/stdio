@@ -184,3 +184,15 @@ def test_summary_names_the_executor_gateway_model_for_claude_only(task_panel: Ta
     assert "（deepseek-v4.1-flash）" in task_panel.options_button.toolTip()
     task_panel.apply_settings(AppSettings(default_executor="codex"))
     assert "deepseek" not in task_panel.options_button.toolTip(), "the profile only routes a Claude Executor"
+
+
+def test_up_in_an_empty_composer_brings_back_the_last_task(task_panel: TaskPanel) -> None:
+    task_panel.description_edit.setPlainText("修复登录问题")
+    task_panel.clear_description()
+    task_panel.description_edit.setFocus()
+    QTest.keyClick(task_panel.description_edit, Qt.Key.Key_Up)
+    assert task_panel.description() == "修复登录问题"
+    # Not while there is text to move the cursor through.
+    task_panel.description_edit.setPlainText("第一行\n第二行")
+    QTest.keyClick(task_panel.description_edit, Qt.Key.Key_Up)
+    assert task_panel.description() == "第一行\n第二行"

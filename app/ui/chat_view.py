@@ -24,6 +24,7 @@ from app.constants import ROUTE_LABELS
 from app.core.task_state import StateSnapshot, TaskPhase, usage_summary
 from app.models.task import AgentTask
 from app.ui.result_panel import _duration, _result_counts
+from app.ui import desktop
 from app.ui.shadow import ShadowSurface
 from app.ui.theme import ACTIVE_COLOR, DANGER, DONE_COLOR, PENDING_COLOR
 
@@ -287,6 +288,19 @@ class _ResultCard(QFrame):
         self.diff_button = QPushButton("查看 Diff")
         self.diff_button.setObjectName("toolButton")
         buttons.addWidget(self.diff_button)
+        # Where the run's files are: its worktree while the changes sit on
+        # their own branch, the project once applied or discarded.
+        self._project_path = task.project_path
+        self._worktree_path = isolation.get("path", "") if isolation else ""
+        self.folder_button = QPushButton("打开文件夹")
+        self.folder_button.setObjectName("toolButton")
+        self.folder_button.setToolTip("在资源管理器中打开这次运行的文件")
+        buttons.addWidget(self.folder_button)
+        self.editor_button: QPushButton | None = None
+        if desktop.find_editor() is not None:
+            self.editor_button = QPushButton("在 VS Code 中打开")
+            self.editor_button.setObjectName("toolButton")
+            buttons.addWidget(self.editor_button)
         self.resume_button: QPushButton | None = None
         if resumable:
             self.resume_button = QPushButton("继续执行")
@@ -296,8 +310,13 @@ class _ResultCard(QFrame):
         buttons.addStretch()
         layout.addLayout(buttons)
 
+    def files_path(self) -> str:
+        return self._worktree_path or self._project_path
+
     def settle_isolation(self, outcome: str) -> None:
         """The run's branch was applied or discarded: say so, retire the buttons."""
+        # Its worktree is removed either way.
+        self._worktree_path = ""
         if self.isolation_label is not None:
             self.isolation_label.setText(outcome)
         for button in (self.apply_button, self.discard_button):
@@ -486,6 +505,8 @@ class ChatView(QWidget):
     plan_approved = Signal(list, str)
     plan_replan_requested = Signal(str)
     plan_discarded = Signal()
+    open_folder_requested = Signal(str)
+    open_editor_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -641,6 +662,9 @@ class ChatView(QWidget):
             result.apply_button.clicked.connect(lambda: self.apply_requested.emit(task))
         if result.discard_button is not None:
             result.discard_button.clicked.connect(lambda: self.discard_requested.emit(task))
+        result.folder_button.clicked.connect(lambda: self.open_folder_requested.emit(result.files_path()))
+        if result.editor_button is not None:
+            result.editor_button.clicked.connect(lambda: self.open_editor_requested.emit(result.files_path()))
         self._append_message(result)
         self._active_card = None
         self._active_key = None

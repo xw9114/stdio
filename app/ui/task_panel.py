@@ -5,7 +5,7 @@ from pathlib import PureWindowsPath
 from typing import cast
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -46,6 +46,7 @@ class TaskPanel(QFrame):
         self._executor_manual = False
         self._retry_manual = False
         self._executor_model = ""
+        self._last_description = ""
         self._parse_timer = QTimer(self)
         self._parse_timer.setSingleShot(True)
         self._parse_timer.setInterval(350)
@@ -291,6 +292,16 @@ class TaskPanel(QFrame):
                 ):
                     self.start_requested.emit()
                     return True
+                if (
+                    key_event.key() == Qt.Key.Key_Up
+                    and not key_event.modifiers()
+                    and not self.description_edit.toPlainText()
+                    and self._last_description
+                ):
+                    # As in Codex: an empty composer brings the last task back.
+                    self.description_edit.setPlainText(self._last_description)
+                    self.description_edit.moveCursor(QTextCursor.MoveOperation.End)
+                    return True
         return super().eventFilter(watched, event)
 
     def _set_composer_focused(self, focused: bool) -> None:
@@ -353,7 +364,14 @@ class TaskPanel(QFrame):
         return self.description_edit.toPlainText().strip()
 
     def clear_description(self) -> None:
+        """After a task is sent; ↑ in the empty composer brings it back."""
+        self._last_description = self.description_edit.toPlainText().strip() or self._last_description
         self.description_edit.clear()
+
+    def set_description(self, text: str) -> None:
+        self.description_edit.setPlainText(text)
+        self.description_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.description_edit.setFocus()
 
     def brain(self) -> str:
         return str(self.brain_combo.currentData())

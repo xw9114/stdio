@@ -151,3 +151,16 @@ def test_usage_summary_marks_cost_as_partial_when_some_turns_are_unpriced() -> N
     assert usage_summary(codex_only) == "tokens 1.0k"
     assert usage_summary({"status": "complete"}) is None
     assert usage_summary(None) is None
+
+
+def test_only_completed_runs_with_their_changes_in_place_take_a_follow_up() -> None:
+    from app.core.task_state import follow_up_run_id
+
+    done = {"status": "complete", "runId": "r1", "plan": {"tasks": []}}
+    assert follow_up_run_id(done) == "r1", "an in-place run: its changes are already in the checkout"
+    assert follow_up_run_id({**done, "isolation": {"state": "active"}}) == "r1"
+    assert follow_up_run_id({**done, "isolation": {"state": "applied"}}) is None, "its worktree is gone"
+    assert follow_up_run_id({**done, "isolation": {"state": "discarded"}}) is None
+    assert follow_up_run_id({**done, "status": "blocked"}) is None, "a stopped run resumes instead"
+    assert follow_up_run_id({"status": "complete", "runId": "r1"}) is None, "nothing to add a task to"
+    assert follow_up_run_id(None) is None

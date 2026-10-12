@@ -148,6 +148,19 @@ def final_phase(exit_code: int, payload: dict[str, Any] | None, cancelled: bool)
 _RESUMABLE_STATUSES = frozenset({"awaiting_approval", "blocked", "failed", "executing"})
 
 
+def follow_up_run_id(payload: dict[str, Any] | None) -> str | None:
+    """The run id `dual-agent resume --follow-up` can add a change to: a
+    completed run with a plan whose changes are still where the run left
+    them (its worktree not yet applied or discarded)."""
+    if not payload or not isinstance(payload.get("plan"), dict) or payload.get("status") != "complete":
+        return None
+    isolation = payload.get("isolation")
+    if isinstance(isolation, dict) and isolation.get("state") != "active":
+        return None
+    run_id = payload.get("runId")
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
 def resumable_run_id(payload: dict[str, Any] | None) -> str | None:
     """Return the run id `dual-agent resume` can continue, if any.
 

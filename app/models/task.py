@@ -33,6 +33,9 @@ class AgentTask:
     # The model a Claude Executor ran on through an executor-only API
     # profile ("" when it used the official login), as of the launch.
     executor_model: str = ""
+    # The entry whose stored run this one continued (plan approval, resume,
+    # follow-up): its run's usage ledger then spans the earlier rounds too.
+    continued_from: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +59,7 @@ class AgentTask:
             # Entries from before modes existed ran the two-agent plan flow.
             mode=normalize_run_mode(value.get("mode", "dual")),
             executor_model=str(value.get("executor_model") or ""),
+            continued_from=str(value.get("continued_from") or ""),
         )
 
 

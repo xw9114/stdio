@@ -173,3 +173,11 @@ def test_list_shaped_goals_and_notes_are_never_read_as_options(tmp_path: Path) -
     assert arguments[-2:] == ["--", task.description]
     resume = builder.build_resume_command(task, "run-1", note="- keep the API")
     assert "--note=- keep the API" in resume.arguments
+
+
+def test_a_follow_up_is_one_argument_even_in_list_form(tmp_path: Path) -> None:
+    builder = CommandBuilder(str(tmp_path / "missing" / "dual-agent.cmd"))
+    request = "- 按钮改成蓝色\n- README 里写上"
+    args = list(builder.build_resume_command(_task("x"), "run-7", follow_up=f" {request} ").arguments)
+    assert f"--follow-up={request}" in args
+    assert not any(arg.startswith("--follow-up") for arg in builder.build_resume_command(_task("x"), "run-7").arguments)

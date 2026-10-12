@@ -73,12 +73,14 @@ class OrchestratorClient(QObject):
         *,
         skip: Sequence[str] = (),
         note: str = "",
+        follow_up: str = "",
     ) -> None:
-        """Continue a stored run (an approved plan, or a blocked/failed one).
-        The task's description must be the run's goal so status polling
-        keeps matching it."""
+        """Continue a stored run (an approved plan, or a blocked/failed one),
+        or add a follow-up change on top of a completed one. The task's
+        description must be the run's goal so status polling keeps matching it."""
         self._start_task(
-            task, self._builder.build_resume_command(task, run_id, skip=skip, note=note)
+            task,
+            self._builder.build_resume_command(task, run_id, skip=skip, note=note, follow_up=follow_up),
         )
 
     def _start_task(self, task: AgentTask, command: CommandSpec) -> None:

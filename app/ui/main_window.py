@@ -34,6 +34,7 @@ from app.core.task_state import (
     TaskPhase,
     active_isolation,
     final_phase,
+    follow_up_run_id,
     phase_from_log,
     resumable_run_id,
 )
@@ -265,6 +266,7 @@ class MainWindow(QMainWindow):
         self.inspector_toggle.toggled.connect(self._set_inspector_visible)
         self.chat_view.show_diff_requested.connect(self._show_diff)
         self.chat_view.resume_requested.connect(self._resume_run)
+        self.chat_view.follow_up_requested.connect(self._follow_up_run)
         self.chat_view.plan_approved.connect(self._approve_plan)
         self.chat_view.plan_replan_requested.connect(self._replan)
         self.chat_view.plan_discarded.connect(self._discard_plan)
@@ -632,6 +634,7 @@ class MainWindow(QMainWindow):
             return
         self._plan_source = None
         task = self._follow_up_task(source)
+        task.continued_from = source.id
         meta = "开始执行计划" + (f" · 跳过 {', '.join(skip)}" if skip else "")
         # The source is closed only once its continuation is running: a launch
         # that fails must leave it open to try again from the history.
@@ -678,6 +681,7 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
         task = self._follow_up_task(source)
+        task.continued_from = source.id
         if self._launch(
             task,
             lambda: self.client.resume_task(task, run_id, note=note),
@@ -687,6 +691,32 @@ class MainWindow(QMainWindow):
         ):
             self._close_source(source, "continued")
             self.chat_view.retire_result(source.id, "已在下方继续执行，请在最新结果中应用或丢弃。")
+
+    def _follow_up_run(self, source: AgentTask) -> None:
+        """A change on top of a passed run, in its own worktree, like a
+        follow-up message in Codex or Claude's desktop apps: the run's work
+        stays, one more task makes the change, and it is applied together."""
+        run_id = follow_up_run_id(source.status_json)
+        if run_id is None or self._busy():
+            return
+        request, accepted = QInputDialog.getMultiLineText(
+            self,
+            "继续修改",
+            "在这次的结果上还要改什么？改动会接着做在同一个分支上，最后一起应用。",
+        )
+        if not accepted or not request.strip():
+            return
+        task = self._follow_up_task(source)
+        task.continued_from = source.id
+        if self._launch(
+            task,
+            lambda: self.client.resume_task(task, run_id, follow_up=request),
+            message=request.strip(),
+            meta="在这次结果上继续修改",
+            new_conversation=False,
+        ):
+            self._close_source(source, "continued")
+            self.chat_view.retire_result(source.id, "已在下方继续修改，请在最新结果中应用或丢弃。")
 
     def _show_outcome(self, task: AgentTask, payload: dict[str, object] | None) -> None:
         """End of a run in the chat: a plan awaiting approval gets the plan
@@ -708,7 +738,11 @@ class MainWindow(QMainWindow):
         # entry is updated when the branch is applied or discarded.
         isolation = None if task.status == "continued" else active_isolation(payload)
         self._shown_isolation = isolation
-        self.chat_view.add_result(task, payload, resumable=resumable, isolation=isolation)
+        # "继续修改": a passed run whose changes are still on its branch.
+        follow_up = task.status == TaskPhase.PASSED and follow_up_run_id(payload) is not None
+        self.chat_view.add_result(
+            task, payload, resumable=resumable, isolation=isolation, follow_up=follow_up
+        )
 
     def _stop_task(self) -> None:
         if not self.client.running:

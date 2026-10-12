@@ -204,6 +204,7 @@ class _ResultCard(QFrame):
         resumable: bool = False,
         isolation: dict[str, str] | None = None,
         parent: QWidget | None = None,
+        follow_up: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("resultCard")
@@ -243,7 +244,8 @@ class _ResultCard(QFrame):
             numbers.append(f"返工 {retries} 次")
         usage = usage_summary(payload)
         if usage:
-            numbers.append(usage)
+            # The duration is this round's; the run's ledger covers them all.
+            numbers.append(f"{usage}（整次运行累计）" if task.continued_from else usage)
         metrics = QLabel(" · ".join(numbers))
         metrics.setObjectName("stepMeta")
         tips = []
@@ -301,6 +303,12 @@ class _ResultCard(QFrame):
             self.editor_button = QPushButton("在 VS Code 中打开")
             self.editor_button.setObjectName("toolButton")
             buttons.addWidget(self.editor_button)
+        self.follow_up_button: QPushButton | None = None
+        if follow_up:
+            self.follow_up_button = QPushButton("继续修改")
+            self.follow_up_button.setObjectName("toolButton")
+            self.follow_up_button.setToolTip("在这次的结果上接着改：同一个分支，改完一起应用")
+            buttons.addWidget(self.follow_up_button)
         self.resume_button: QPushButton | None = None
         if resumable:
             self.resume_button = QPushButton("继续执行")
@@ -315,8 +323,10 @@ class _ResultCard(QFrame):
 
     def settle_isolation(self, outcome: str) -> None:
         """The run's branch was applied or discarded: say so, retire the buttons."""
-        # Its worktree is removed either way.
+        # Its worktree is removed either way, and nothing is left to follow up.
         self._worktree_path = ""
+        if self.follow_up_button is not None:
+            self.follow_up_button.setEnabled(False)
         if self.isolation_label is not None:
             self.isolation_label.setText(outcome)
         for button in (self.apply_button, self.discard_button):
@@ -328,8 +338,9 @@ class _ResultCard(QFrame):
         its branch: applying, discarding or resuming from here would act on a
         run that has moved on, or on a branch that is already gone."""
         self.settle_isolation(note)
-        if self.resume_button is not None:
-            self.resume_button.setEnabled(False)
+        for button in (self.resume_button, self.follow_up_button):
+            if button is not None:
+                button.setEnabled(False)
 
 
 class _PlanCard(QFrame):
@@ -506,6 +517,7 @@ class ChatView(QWidget):
     plan_replan_requested = Signal(str)
     plan_discarded = Signal()
     open_folder_requested = Signal(str)
+    follow_up_requested = Signal(object)
     open_editor_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -651,10 +663,13 @@ class ChatView(QWidget):
         *,
         resumable: bool = False,
         isolation: dict[str, str] | None = None,
+        follow_up: bool = False,
     ) -> None:
         ending_state = "done" if task.status == TaskPhase.PASSED else "failed"
         self._end_active(ending_state)
-        result = _ResultCard(task, payload, resumable, isolation)
+        result = _ResultCard(task, payload, resumable, isolation, follow_up=follow_up)
+        if result.follow_up_button is not None:
+            result.follow_up_button.clicked.connect(lambda: self.follow_up_requested.emit(task))
         result.diff_button.clicked.connect(self.show_diff_requested.emit)
         if result.resume_button is not None:
             result.resume_button.clicked.connect(lambda: self.resume_requested.emit(task))

@@ -1036,3 +1036,66 @@ def test_settings_saved_mid_run_keep_the_orchestrator_path_until_it_ends(
     window._choose_project()
     assert chosen == [], "Ctrl+O does not change the project mid-run"
     window.close()
+
+
+def test_continue_editing_a_passed_run_adds_a_follow_up_on_its_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", staticmethod(lambda *a, **k: ("按钮改成蓝色", True)))
+    window = MainWindow()
+    calls: list[tuple] = []
+    monkeypatch.setattr(window.client, "resume_task", lambda task, run_id, **k: calls.append((run_id, k)))
+    passed = _isolated_task(tmp_path)
+    passed.status_json["plan"] = {"tasks": []}
+    window._show_outcome(passed, passed.status_json)
+    card = window.chat_view.findChildren(_ResultCard)[-1]
+    assert card.follow_up_button is not None and card.resume_button is None
+
+    card.follow_up_button.click()
+
+    assert calls == [("run-9", {"follow_up": "按钮改成蓝色"})]
+    assert not card.follow_up_button.isEnabled() and not card.apply_button.isEnabled(), "the newer card owns the branch now"
+    window.current_task = None
+    window.close()
+
+
+def test_an_applied_run_offers_no_follow_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    applied = _isolated_task(tmp_path)
+    applied.status_json["plan"] = {"tasks": []}
+    applied.status_json["isolation"]["state"] = "applied"
+    window._show_outcome(applied, applied.status_json)
+    assert window.chat_view.findChildren(_ResultCard)[-1].follow_up_button is None
+    window.close()
+
+
+def test_a_continued_round_labels_the_run_totals_as_cumulative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from app.ui.chat_view import _ResultCard
+
+    data_dir = _isolate_data_dir(monkeypatch, tmp_path)
+    _seed_settings(data_dir, check_environment_on_start=False)
+    window = MainWindow()
+    payload = {"status": "complete", "runId": "r1", "usage": {"total": {"inputTokens": 1000, "outputTokens": 10}, "steps": []}}
+    first = AgentTask("t", str(tmp_path), "claude", "codex", 3, status="passed", status_json=payload)
+    later = AgentTask("t", str(tmp_path), "claude", "codex", 3, status="passed", status_json=payload, continued_from=first.id)
+    for task in (first, later):
+        window._show_outcome(task, payload)
+    texts = [
+        " ".join(label.text() for label in card.findChildren(QLabel) if "tokens" in label.text())
+        for card in window.chat_view.findChildren(_ResultCard)
+    ]
+    assert "累计" not in texts[0] and "（整次运行累计）" in texts[1]
+    assert AgentTask.from_dict(later.to_dict()).continued_from == first.id
+    window.close()

@@ -51,8 +51,12 @@ class CommandBuilder:
         *,
         skip: Sequence[str] = (),
         note: str = "",
+        follow_up: str = "",
     ) -> CommandSpec:
         arguments = ["resume", *self._agent_arguments(task), "--run-id", run_id]
+        if follow_up.strip():
+            # Joined with "=" for the same reason as --note below.
+            arguments.append(f"--follow-up={follow_up.strip()}")
         if skip:
             arguments.extend(["--skip", ",".join(skip)])
         if note.strip():
